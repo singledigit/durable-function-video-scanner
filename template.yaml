@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Scanner - Lambda Durable Function triggered by S3 via EventBridge
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    Architectures:
+      - arm64
+    Timeout: 900
+    MemorySize: 512
+    Tracing: Active
+
+Resources:
+  # DynamoDB table for callback tokens
+  CallbackTokenTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: scanner-callback-tokens
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jobName
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jobName
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # S3 Bucket for uploads
+  ScannerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Lambda Durable Function
+  ScannerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: scanner-function
+      CodeUri: src/scanner/
+      Handler: index.handler
+      Description: Scanner durable function triggered by S3 events
+      AutoPublishAlias: live
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: INFO
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: scanner
+          POWERTOOLS_LOG_LEVEL: INFO
+          CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
+      DurableConfig:
+        ExecutionTimeout: 3600
+        RetentionPeriodInDays: 30
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ScannerBucket
+        - S3WritePolicy:
+            BucketName: !Ref ScannerBucket
+        - DynamoDBWritePolicy:
+            TableName: !Ref CallbackTokenTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - transcribe:StartTranscriptionJob
+                - transcribe:GetTranscriptionJob
+                - transcribe:TagResource
+              Resource: '*'
+      Events:
+        S3ObjectCreated:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.s3
+              detail-type:
+                - Object Created
+              detail:
+                bucket:
+                  name:
+                    - !Ref ScannerBucket
+                object:
+                  key:
+                    - prefix: raw/
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
+  # Transcribe Callback Function
+  TranscribeCallbackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: transcribe-callback-function
+      CodeUri: src/transcribe-callback/
+      Handler: index.handler
+      Description: Handles Transcribe completion events and sends callbacks
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: transcribe-callback
+          POWERTOOLS_LOG_LEVEL: INFO
+          CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CallbackTokenTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:SendDurableExecutionCallbackSuccess
+                - lambda:SendDurableExecutionCallbackFailure
+              Resource: 
+                - !GetAtt ScannerFunction.Arn
+                - !Sub '${ScannerFunction.Arn}:*'
+            - Effect: Allow
+              Action:
+                - transcribe:GetTranscriptionJob
+              Resource: '*'
+      Events:
+        TranscribeComplete:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.transcribe
+              detail-type:
+                - Transcribe Job State Change
+              detail:
+                TranscriptionJobStatus:
+                  - COMPLETED
+                  - FAILED
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
+Outputs:
+  ScannerBucketName:
+    Description: S3 Bucket for uploads
+    Value: !Ref ScannerBucket
+  
+  ScannerFunctionArn:
+    Description: Scanner Function ARN
+    Value: !GetAtt ScannerFunction.Arn
