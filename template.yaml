@@ -77,6 +77,12 @@ Resources:
                 - transcribe:GetTranscriptionJob
                 - transcribe:TagResource
               Resource: '*'
+            - Effect: Allow
+              Action:
+                - comprehend:DetectToxicContent
+                - comprehend:DetectSentiment
+                - comprehend:DetectPiiEntities
+              Resource: '*'
       Events:
         S3ObjectCreated:
           Type: EventBridgeRule
