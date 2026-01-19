@@ -84,283 +84,325 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
 
   try {
 
-  // Step 1: Start transcription and wait for callback
-  const transcriptionResult = await context.waitForCallback<string>(
-    'transcription-result',
-    async (callbackToken: string) => {
-      const jobName = `transcribe-${Date.now()}-${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
-      
-      logger.info('Starting transcription job', { jobName, objectKey });
-      
-      try {
-        // Store callback token in DynamoDB
-        await ddb.send(new PutItemCommand({
-          TableName: CALLBACK_TOKEN_TABLE,
-          Item: marshall({
-            jobName,
-            callbackToken,
-            bucketName,
-            objectKey,
-            createdAt: new Date().toISOString(),
-            ttl: Math.floor(Date.now() / 1000) + 86400 // 24 hours TTL
-          })
-        }));
-        
-        logger.info('Callback token stored in DynamoDB', { jobName });
-        
-        const command = new StartTranscriptionJobCommand({
-          TranscriptionJobName: jobName,
-          LanguageCode: 'en-US',
-          MediaFormat: 'mp4',
-          Media: {
-            MediaFileUri: `s3://${bucketName}/${objectKey}`
-          },
-          OutputBucketName: bucketName,
-          OutputKey: `transcripts/${objectKey}.json`,
-          Tags: [
-            {
-              Key: 'SourceBucket',
-              Value: bucketName
-            },
-            {
-              Key: 'SourceKey',
-              Value: objectKey
-            }
-          ]
-        });
-        
-        const response = await transcribe.send(command);
-        
-        logger.info('Transcription job started successfully', { 
-          jobName, 
-          status: response.TranscriptionJob?.TranscriptionJobStatus 
-        });
-      } catch (error) {
-        logger.error('Failed to start transcription job', { 
-          jobName, 
-          error: error instanceof Error ? error.message : String(error),
-          errorName: error instanceof Error ? error.name : 'Unknown',
-          objectKey,
-          bucketName
-        });
-        throw error;
-      }
-    },
-    {
-      timeout: {seconds: CALLBACK_TIMEOUT_SECONDS},
-      retryStrategy: CALLBACK_RETRY_STRATEGY
-    }
-  );
-
-  // Step 2: Fetch transcript from S3
-  const transcriptData = await context.step('fetch-transcript', async () => {
-    logger.info('Fetching transcript from S3', { transcriptionResult });
-    
-    const parsedResult = typeof transcriptionResult === 'string' 
-      ? JSON.parse(transcriptionResult) 
-      : transcriptionResult;
-    
-    const transcriptUri = parsedResult.transcriptUri;
-    if (!transcriptUri) {
-      throw new Error('No transcript URI found in transcription result');
-    }
-    
-    let bucket: string;
-    let key: string;
-    
-    // Parse S3 URI - can be s3://bucket/key or https://s3.region.amazonaws.com/bucket/key
-    const s3UriMatch = transcriptUri.match(/s3:\/\/([^\/]+)\/(.+)/);
-    const httpsUriMatch = transcriptUri.match(/https:\/\/s3[.-]([^.]+)\.amazonaws\.com\/([^\/]+)\/(.+)/);
-    
-    if (s3UriMatch) {
-      [, bucket, key] = s3UriMatch;
-    } else if (httpsUriMatch) {
-      // httpsUriMatch: [full, region, bucket, key]
-      bucket = httpsUriMatch[2];
-      key = httpsUriMatch[3];
-    } else {
-      throw new Error(`Invalid S3 URI format: ${transcriptUri}`);
-    }
-    
-    logger.info('Fetching transcript file', { bucket, key });
-    
-    const response = await s3.send(new GetObjectCommand({
-      Bucket: bucket,
-      Key: key
-    }));
-    
-    const transcriptJson = await response.Body?.transformToString();
-    if (!transcriptJson) {
-      throw new Error('Empty transcript file');
-    }
-    
-    const transcript = JSON.parse(transcriptJson);
-    const fullText = transcript.results?.transcripts?.[0]?.transcript || '';
-    
-    logger.info('Transcript fetched successfully', { 
-      textLength: fullText.length,
-      bucket,
-      key
-    });
-    
-    return {
-      fullText,
-      transcriptUri,
-      transcript
-    };
-  });
-
-  // Step 3: Start Rekognition text detection and wait for callback (with error handling)
-  let videoTextData = null;
-  let rekognitionError = null;
-  
-  try {
-    const rekognitionResult = await context.waitForCallback<string>(
-      'rekognition-result',
-      async (callbackToken: string) => {
-        const jobName = `rekognition-${Date.now()}-${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
-        
-        logger.info('Starting Rekognition text detection job', { jobName, objectKey });
-        
-        try {
-          // Store callback token in DynamoDB
-          await ddb.send(new PutItemCommand({
-            TableName: CALLBACK_TOKEN_TABLE,
-            Item: marshall({
-              jobName,
-              callbackToken,
-              bucketName,
+  // Steps 1-4: Run Transcribe and Rekognition in parallel
+  const parallelResults = await context.parallel([
+    // Branch 1: Transcription workflow
+    async () => {
+      // Step 1: Start transcription and wait for callback
+      const transcriptionResult = await context.waitForCallback<string>(
+        'transcription-result',
+        async (callbackToken: string) => {
+          const jobName = `transcribe-${Date.now()}-${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
+          
+          logger.info('Starting transcription job', { jobName, objectKey });
+          
+          try {
+            // Store callback token in DynamoDB
+            await ddb.send(new PutItemCommand({
+              TableName: CALLBACK_TOKEN_TABLE,
+              Item: marshall({
+                jobName,
+                callbackToken,
+                bucketName,
+                objectKey,
+                createdAt: new Date().toISOString(),
+                ttl: Math.floor(Date.now() / 1000) + 86400 // 24 hours TTL
+              })
+            }));
+            
+            logger.info('Callback token stored in DynamoDB', { jobName });
+            
+            const command = new StartTranscriptionJobCommand({
+              TranscriptionJobName: jobName,
+              LanguageCode: 'en-US',
+              MediaFormat: 'mp4',
+              Media: {
+                MediaFileUri: `s3://${bucketName}/${objectKey}`
+              },
+              OutputBucketName: bucketName,
+              OutputKey: `transcripts/${objectKey}.json`,
+              Tags: [
+                {
+                  Key: 'SourceBucket',
+                  Value: bucketName
+                },
+                {
+                  Key: 'SourceKey',
+                  Value: objectKey
+                }
+              ]
+            });
+            
+            const response = await transcribe.send(command);
+            
+            logger.info('Transcription job started successfully', { 
+              jobName, 
+              status: response.TranscriptionJob?.TranscriptionJobStatus 
+            });
+          } catch (error) {
+            logger.error('Failed to start transcription job', { 
+              jobName, 
+              error: error instanceof Error ? error.message : String(error),
+              errorName: error instanceof Error ? error.name : 'Unknown',
               objectKey,
-              jobType: 'rekognition',
-              createdAt: new Date().toISOString(),
-              ttl: Math.floor(Date.now() / 1000) + 86400 // 24 hours TTL
-            })
-          }));
-          
-          logger.info('Rekognition callback token stored in DynamoDB', { jobName });
-          
-          const command = new StartTextDetectionCommand({
-            Video: {
-              S3Object: {
-                Bucket: bucketName,
-                Name: objectKey
-              }
-            },
-            NotificationChannel: {
-              SNSTopicArn: REKOGNITION_SNS_TOPIC_ARN,
-              RoleArn: REKOGNITION_ROLE_ARN
-            },
-            JobTag: jobName
-          });
-          
-          const response = await rekognition.send(command);
-          
-          logger.info('Rekognition text detection job started successfully', { 
-            jobName,
-            jobId: response.JobId
-          });
-        } catch (error) {
-          logger.error('Failed to start Rekognition text detection job', { 
-            jobName, 
-            error: error instanceof Error ? error.message : String(error),
-            errorName: error instanceof Error ? error.name : 'Unknown',
-            objectKey,
-            bucketName
-          });
-          throw error;
+              bucketName
+            });
+            throw error;
+          }
+        },
+        {
+          timeout: {seconds: CALLBACK_TIMEOUT_SECONDS},
+          retryStrategy: CALLBACK_RETRY_STRATEGY
         }
-      },
-      {
-        timeout: {seconds: CALLBACK_TIMEOUT_SECONDS},
-        retryStrategy: CALLBACK_RETRY_STRATEGY
-      }
-    );
+      );
 
-    // Step 4: Fetch Rekognition results and extract video text
-    videoTextData = await context.step('fetch-video-text', async () => {
-      logger.info('Fetching Rekognition results', { rekognitionResult });
-      
-      const parsedResult = typeof rekognitionResult === 'string' 
-        ? JSON.parse(rekognitionResult) 
-        : rekognitionResult;
-      
-      const jobId = parsedResult.jobId;
-      if (!jobId) {
-        throw new Error('No job ID found in Rekognition result');
-      }
-      
-      logger.info('Fetching text detection results', { jobId });
-      
-      // Fetch all pages of results
-      const textDetections: any[] = [];
-      let nextToken: string | undefined;
-      
-      do {
-        const response = await rekognition.send(new GetTextDetectionCommand({
-          JobId: jobId,
-          NextToken: nextToken
+      // Step 2: Fetch transcript from S3
+      const transcriptData = await context.step('fetch-transcript', async () => {
+        logger.info('Fetching transcript from S3', { transcriptionResult });
+        
+        const parsedResult = typeof transcriptionResult === 'string' 
+          ? JSON.parse(transcriptionResult) 
+          : transcriptionResult;
+        
+        const transcriptUri = parsedResult.transcriptUri;
+        if (!transcriptUri) {
+          throw new Error('No transcript URI found in transcription result');
+        }
+        
+        let bucket: string;
+        let key: string;
+        
+        // Parse S3 URI - can be s3://bucket/key or https://s3.region.amazonaws.com/bucket/key
+        const s3UriMatch = transcriptUri.match(/s3:\/\/([^\/]+)\/(.+)/);
+        const httpsUriMatch = transcriptUri.match(/https:\/\/s3[.-]([^.]+)\.amazonaws\.com\/([^\/]+)\/(.+)/);
+        
+        if (s3UriMatch) {
+          [, bucket, key] = s3UriMatch;
+        } else if (httpsUriMatch) {
+          // httpsUriMatch: [full, region, bucket, key]
+          bucket = httpsUriMatch[2];
+          key = httpsUriMatch[3];
+        } else {
+          throw new Error(`Invalid S3 URI format: ${transcriptUri}`);
+        }
+        
+        logger.info('Fetching transcript file', { bucket, key });
+        
+        const response = await s3.send(new GetObjectCommand({
+          Bucket: bucket,
+          Key: key
         }));
         
-        if (response.TextDetections) {
-          textDetections.push(...response.TextDetections);
+        const transcriptJson = await response.Body?.transformToString();
+        if (!transcriptJson) {
+          throw new Error('Empty transcript file');
         }
         
-        nextToken = response.NextToken;
-      } while (nextToken);
-      
-      logger.info('Fetched text detections', { count: textDetections.length });
-      
-      // Extract and deduplicate text with timestamps
-      const textSegments: Array<{
+        const transcript = JSON.parse(transcriptJson);
+        const fullText = transcript.results?.transcripts?.[0]?.transcript || '';
+        
+        logger.info('Transcript fetched successfully', { 
+          textLength: fullText.length,
+          bucket,
+          key
+        });
+        
+        return {
+          fullText,
+          transcriptUri,
+          transcript,
+          transcriptionResult
+        };
+      });
+
+      return transcriptData;
+    },
+
+    // Branch 2: Rekognition workflow
+    async () => {
+      try {
+        // Step 3: Start Rekognition and wait for callback
+        const rekognitionResult = await context.waitForCallback<string>(
+          'rekognition-result',
+          async (callbackToken: string) => {
+            const jobName = `rekognition-${Date.now()}-${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
+            
+            logger.info('Starting Rekognition text detection job', { jobName, objectKey });
+            
+            try {
+              // Store callback token in DynamoDB
+              await ddb.send(new PutItemCommand({
+                TableName: CALLBACK_TOKEN_TABLE,
+                Item: marshall({
+                  jobName,
+                  callbackToken,
+                  bucketName,
+                  objectKey,
+                  jobType: 'rekognition',
+                  createdAt: new Date().toISOString(),
+                  ttl: Math.floor(Date.now() / 1000) + 86400 // 24 hours TTL
+                })
+              }));
+              
+              logger.info('Rekognition callback token stored in DynamoDB', { jobName });
+              
+              const command = new StartTextDetectionCommand({
+                Video: {
+                  S3Object: {
+                    Bucket: bucketName,
+                    Name: objectKey
+                  }
+                },
+                NotificationChannel: {
+                  SNSTopicArn: REKOGNITION_SNS_TOPIC_ARN,
+                  RoleArn: REKOGNITION_ROLE_ARN
+                },
+                JobTag: jobName
+              });
+              
+              const response = await rekognition.send(command);
+              
+              logger.info('Rekognition text detection job started successfully', { 
+                jobName,
+                jobId: response.JobId
+              });
+            } catch (error) {
+              logger.error('Failed to start Rekognition text detection job', { 
+                jobName, 
+                error: error instanceof Error ? error.message : String(error),
+                errorName: error instanceof Error ? error.name : 'Unknown',
+                objectKey,
+                bucketName
+              });
+              throw error;
+            }
+          },
+          {
+            timeout: {seconds: CALLBACK_TIMEOUT_SECONDS},
+            retryStrategy: CALLBACK_RETRY_STRATEGY
+          }
+        );
+
+        // Step 4: Fetch Rekognition results and extract video text
+        const videoTextData = await context.step('fetch-video-text', async () => {
+          logger.info('Fetching Rekognition results', { rekognitionResult });
+          
+          const parsedResult = typeof rekognitionResult === 'string' 
+            ? JSON.parse(rekognitionResult) 
+            : rekognitionResult;
+          
+          const jobId = parsedResult.jobId;
+          if (!jobId) {
+            throw new Error('No job ID found in Rekognition result');
+          }
+          
+          logger.info('Fetching text detection results', { jobId });
+          
+          // Fetch all pages of results
+          const textDetections: any[] = [];
+          let nextToken: string | undefined;
+          
+          do {
+            const response = await rekognition.send(new GetTextDetectionCommand({
+              JobId: jobId,
+              NextToken: nextToken
+            }));
+            
+            if (response.TextDetections) {
+              textDetections.push(...response.TextDetections);
+            }
+            
+            nextToken = response.NextToken;
+          } while (nextToken);
+          
+          logger.info('Fetched text detections', { count: textDetections.length });
+          
+          // Extract and deduplicate text with timestamps
+          const textSegments: Array<{
+            text: string;
+            timestamp: number;
+            confidence: number;
+            boundingBox?: any;
+          }> = [];
+          
+          const seenText = new Map<string, number>(); // text -> first timestamp
+          
+          for (const detection of textDetections) {
+            const text = detection.TextDetection?.DetectedText;
+            const confidence = detection.TextDetection?.Confidence || 0;
+            const timestamp = detection.Timestamp || 0;
+            
+            // Filter by confidence threshold
+            if (confidence < 80) continue;
+            
+            if (text && !seenText.has(text)) {
+              seenText.set(text, timestamp);
+              textSegments.push({
+                text,
+                timestamp: timestamp / 1000, // Convert ms to seconds
+                confidence: confidence / 100, // Convert to 0-1 range
+                boundingBox: detection.TextDetection?.Geometry?.BoundingBox
+              });
+            }
+          }
+          
+          // Combine all unique text
+          const fullText = textSegments.map(s => s.text).join(' ');
+          
+          logger.info('Video text extracted', { 
+            segmentCount: textSegments.length,
+            textLength: fullText.length
+          });
+          
+          return {
+            fullText,
+            textSegments,
+            detectionCount: textDetections.length
+          };
+        });
+
+        return { videoTextData, error: null };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.warn('Rekognition text detection failed, continuing with audio-only analysis', {
+          error: errorMessage,
+          errorName: error instanceof Error ? error.name : 'Unknown',
+          objectKey
+        });
+        return { videoTextData: null, error: errorMessage };
+      }
+    }
+  ]);
+
+  // Extract results from parallel execution
+  const transcriptData = parallelResults.all[0].result as {
+    fullText: string;
+    transcriptUri: string;
+    transcript: any;
+    transcriptionResult: string;
+  };
+  const rekognitionData = parallelResults.all[1].result as {
+    videoTextData: {
+      fullText: string;
+      textSegments: Array<{
         text: string;
         timestamp: number;
         confidence: number;
         boundingBox?: any;
-      }> = [];
-      
-      const seenText = new Map<string, number>(); // text -> first timestamp
-      
-      for (const detection of textDetections) {
-        const text = detection.TextDetection?.DetectedText;
-        const confidence = detection.TextDetection?.Confidence || 0;
-        const timestamp = detection.Timestamp || 0;
-        
-        // Filter by confidence threshold
-        if (confidence < 80) continue;
-        
-        if (text && !seenText.has(text)) {
-          seenText.set(text, timestamp);
-          textSegments.push({
-            text,
-            timestamp: timestamp / 1000, // Convert ms to seconds
-            confidence: confidence / 100, // Convert to 0-1 range
-            boundingBox: detection.TextDetection?.Geometry?.BoundingBox
-          });
-        }
-      }
-      
-      // Combine all unique text
-      const fullText = textSegments.map(s => s.text).join(' ');
-      
-      logger.info('Video text extracted', { 
-        segmentCount: textSegments.length,
-        textLength: fullText.length
-      });
-      
-      return {
-        fullText,
-        textSegments,
-        detectionCount: textDetections.length
-      };
-    });
-  } catch (error) {
-    rekognitionError = error instanceof Error ? error.message : String(error);
-    logger.warn('Rekognition text detection failed, continuing with audio-only analysis', {
-      error: rekognitionError,
-      errorName: error instanceof Error ? error.name : 'Unknown',
-      objectKey
-    });
-  }
+      }>;
+      detectionCount: number;
+    } | null;
+    error: string | null;
+  };
+  const videoTextData = rekognitionData.videoTextData;
+  const rekognitionError = rekognitionData.error;
+  const transcriptionResult = transcriptData.transcriptionResult;
+
+  logger.info('Parallel jobs completed', {
+    hasTranscript: !!transcriptData,
+    hasVideoText: !!videoTextData,
+    rekognitionFailed: !!rekognitionError
+  });
 
   // Step 5: Build combined corpus with source mapping
   const corpusData = await context.step('build-corpus', async () => {

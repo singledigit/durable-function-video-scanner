@@ -16,7 +16,7 @@ The system uses AWS Lambda Durable Functions to orchestrate a multi-step workflo
 graph TD
     A[Video Uploaded to S3] -->|EventBridge| B[Scanner Function Starts]
     B --> C[Step 1: Start Transcription]
-    C -->|Store Callback Token| D[DynamoDB]
+    C -->|Store Callback Token| D[DynamoDB: Callback Tokens]
     C -->|Start Job| E[Amazon Transcribe]
     C -->|waitForCallback| F[Function Suspends]
     
@@ -29,29 +29,60 @@ graph TD
     J -->|Get Object| K[S3 Transcript JSON]
     K --> L[Extract Full Text]
     
-    L --> M[Step 3: Parallel Analysis]
-    M --> N[Branch 1: Toxicity Detection]
-    M --> O[Branch 2: Sentiment Analysis]
-    M --> P[Branch 3: PII Detection]
+    L --> M[Step 3: Start Rekognition]
+    M -->|Store Callback Token| D
+    M -->|Start Job| N[Amazon Rekognition]
+    M -->|waitForCallback| O[Function Suspends]
     
-    N -->|Amazon Comprehend| Q[Toxicity Results]
-    O -->|Amazon Comprehend| R[Sentiment Results]
-    P -->|Amazon Comprehend| S[PII Results]
+    N -->|Job Complete| P[SNS Notification]
+    P --> Q[Rekognition Callback Function]
+    Q -->|Get Token| D
+    Q -->|Send Callback| R[Resume Scanner Function]
     
-    Q --> T[Combine Results]
-    R --> T
-    S --> T
+    R --> S[Step 4: Fetch Video Text]
+    S --> T[Extract Text Detections]
     
-    T --> U[Return Final Analysis]
+    T --> U[Step 5: Build Combined Corpus]
+    U --> V[Map Audio + Screen Text]
+    
+    V --> W[Step 6: Parallel Analysis]
+    W --> X[Branch 1: Toxicity Detection]
+    W --> Y[Branch 2: Sentiment Analysis]
+    W --> Z[Branch 3: PII Detection]
+    
+    X -->|Amazon Comprehend| AA[Toxicity Results]
+    Y -->|Amazon Comprehend| AB[Sentiment Results]
+    Z -->|Amazon Comprehend| AC[PII Results]
+    
+    AA --> AD[Step 7: Map to Sources]
+    AB --> AD
+    AC --> AD
+    
+    AD --> AE[Audio vs Screen Breakdown]
+    
+    AE --> AF[Step 8: AI Summary]
+    AF -->|Amazon Bedrock| AG[Nova Lite Model]
+    AG --> AH[Executive Summary]
+    
+    AH --> AI[Step 9: Save Results]
+    AI -->|Write JSON| AJ[S3: reports/scanId.json]
+    AI -->|Write HTML| AK[S3: reports/scanId.html]
+    AI -->|Write Metadata| AL[DynamoDB: ScanResults]
+    
+    AL --> AM[Return Final Result]
     
     style B fill:#ff9900
     style I fill:#ff9900
+    style R fill:#ff9900
     style F fill:#ffeb3b
-    style M fill:#4caf50
-    style N fill:#2196f3
-    style O fill:#2196f3
-    style P fill:#2196f3
-    style U fill:#4caf50
+    style O fill:#ffeb3b
+    style W fill:#4caf50
+    style X fill:#2196f3
+    style Y fill:#2196f3
+    style Z fill:#2196f3
+    style AF fill:#9c27b0
+    style AI fill:#4caf50
+    style AM fill:#4caf50
 ```
 
 **Legend:**
@@ -59,14 +90,19 @@ graph TD
 - 🟡 Yellow: Function Suspended (No Compute Charges)
 - 🟢 Green: Parallel Execution / Completion
 - 🔵 Blue: Concurrent Analysis Branches
+- 🟣 Purple: AI Processing
 
 ### Components
 
 - **Scanner Function** (Durable): Main orchestrator that coordinates the entire workflow
 - **Transcribe Callback Function**: Handles Amazon Transcribe completion events
-- **S3 Bucket**: Stores uploaded videos and transcription results
-- **DynamoDB Table**: Manages callback tokens for durable execution
+- **Rekognition Callback Function**: Handles Amazon Rekognition completion events via SNS
+- **S3 Bucket**: Stores uploaded videos, transcripts, and scan reports
+- **DynamoDB Tables**: 
+  - Callback tokens for durable execution
+  - Scan results with user-based and approval status indexes
 - **EventBridge**: Routes S3 and Transcribe events to Lambda functions
+- **SNS Topic**: Routes Rekognition completion notifications
 
 ## Durable Function Workflow
 
@@ -82,7 +118,7 @@ context.waitForCallback('transcription-result', async (callbackToken) => {
 ```
 
 **What happens:**
-- Receives S3 object created event for videos in `raw/` prefix
+- Receives S3 object created event for videos in `raw/{userId}/` prefix
 - Generates unique transcription job name
 - Stores callback token in DynamoDB with 24-hour TTL
 - Starts Amazon Transcribe job with job name as correlation ID
@@ -96,7 +132,7 @@ context.waitForCallback('transcription-result', async (callbackToken) => {
 context.step('fetch-transcript', async () => {
   // Parse transcript URI (supports s3:// and https:// formats)
   // Fetch transcript JSON from S3
-  // Extract full text from transcript
+  // Extract full text and word-level timestamps
 })
 ```
 
@@ -104,10 +140,59 @@ context.step('fetch-transcript', async () => {
 - Parses the transcript URI from Transcribe result
 - Handles both S3 URI (`s3://bucket/key`) and HTTPS URL formats
 - Fetches the transcript JSON file from S3
-- Extracts the full transcript text
+- Extracts the full transcript text with timestamps
 - Returns text and metadata for next step
 
-### Step 3: Parallel Content Analysis
+### Step 3: Start Rekognition Text Detection
+```
+context.waitForCallback('rekognition-result', async (callbackToken) => {
+  // Store callback token in DynamoDB
+  // Start Amazon Rekognition text detection job
+  // Job completion triggers callback via SNS
+})
+```
+
+**What happens:**
+- Stores callback token in DynamoDB
+- Starts Rekognition text detection job on video
+- Configures SNS notification channel for job completion
+- Function suspends while waiting for text detection
+- Rekognition publishes to SNS when complete
+- SNS triggers callback function
+- Function resumes with job ID
+
+### Step 4: Fetch Video Text Detections
+```
+context.step('fetch-video-text', async () => {
+  // Fetch all text detection results
+  // Deduplicate and filter by confidence
+  // Extract text with timestamps and bounding boxes
+})
+```
+
+**What happens:**
+- Fetches all text detection results from Rekognition
+- Handles pagination for large result sets
+- Filters detections by confidence threshold (>80%)
+- Deduplicates text across frames
+- Returns unique text segments with timestamps
+
+### Step 5: Build Combined Corpus
+```
+context.step('build-corpus', async () => {
+  // Combine audio transcript and screen text
+  // Create position index mapping text to source
+  // Track timestamps for both audio and screen
+})
+```
+
+**What happens:**
+- Combines transcript words with video text detections
+- Creates position index mapping each word to its source (audio/screen)
+- Preserves timestamps for temporal analysis
+- Enables source-level issue tracking
+
+### Step 6: Parallel Content Analysis
 ```
 context.parallel([
   async () => { /* Toxicity Detection */ },
@@ -117,7 +202,7 @@ context.parallel([
 ```
 
 **What happens:**
-All three analyses run concurrently using Amazon Comprehend:
+All three analyses run concurrently on the combined corpus using Amazon Comprehend:
 
 #### Branch 1: Toxicity Detection
 - Detects 7 types of toxic content:
@@ -151,46 +236,74 @@ All three analyses run concurrently using Amazon Comprehend:
 - Returns count, types, and locations of all PII found
 - Analyzes first 100KB if text exceeds limit
 
+### Step 7: Map Results to Sources
+```
+context.step('map-to-sources', async () => {
+  // Map PII entities back to audio or screen source
+  // Create breakdown by source type
+  // Enable targeted remediation
+})
+```
+
+**What happens:**
+- Maps each detected PII entity to its source (audio/screen)
+- Uses position index to determine origin
+- Creates summary showing issues per source
+- Enables targeted content moderation
+
+### Step 8: Generate AI Summary
+```
+context.step('generate-summary', async () => {
+  // Build structured prompt with all analysis results
+  // Call Amazon Bedrock Nova Lite model
+  // Generate executive summary with recommendations
+})
+```
+
+**What happens:**
+- Constructs comprehensive prompt with all findings
+- Calls Amazon Bedrock Nova Lite for cost-effective summarization
+- Generates 3-4 sentence executive summary
+- Provides overall safety assessment (Safe/Caution/Unsafe)
+- Highlights critical findings and recommendations
+- Falls back gracefully if AI generation fails
+
+### Step 9: Save Results
+```
+context.step('save-results', async () => {
+  // Generate scanId and extract userId
+  // Save full JSON report to S3
+  // Generate and save HTML report to S3
+  // Save metadata to DynamoDB
+})
+```
+
+**What happens:**
+- Generates unique scanId (UUID)
+- Extracts userId from object key (`raw/{userId}/{filename}`)
+- Determines overall assessment (SAFE/CAUTION/UNSAFE)
+- Saves complete JSON report to S3 (`reports/{scanId}.json`)
+- Generates beautiful HTML report with color-coded results
+- Saves HTML report to S3 (`reports/{scanId}.html`)
+- Stores metadata in DynamoDB with:
+  - User-based index for querying user's videos
+  - Approval status index for reviewer workflows
+  - Sets initial status to PENDING_REVIEW
+
 ### Final Result Structure
 
 ```json
 {
-  "transcriptionResult": { /* Transcribe callback data */ },
-  "transcriptData": {
-    "fullText": "...",
-    "transcriptUri": "s3://..."
-  },
-  "analysis": {
-    "toxicity": {
-      "hasToxicContent": false,
-      "labels": [
-        { "Name": "PROFANITY", "Score": 0.019 },
-        { "Name": "HATE_SPEECH", "Score": 0.127 }
-      ],
-      "chunked": false
-    },
-    "sentiment": {
-      "sentiment": "NEGATIVE",
-      "sentimentScore": {
-        "Positive": 0.053,
-        "Negative": 0.893,
-        "Neutral": 0.051,
-        "Mixed": 0.003
-      },
-      "truncated": false
-    },
-    "pii": {
-      "hasPII": true,
-      "entityCount": 3,
-      "entityTypes": { "NAME": 1, "PHONE": 2 },
-      "entities": [
-        { "type": "NAME", "score": 0.999, "beginOffset": 18, "endOffset": 30 }
-      ]
-    }
-  },
-  "objectKey": "raw/video.mp4",
+  "scanId": "uuid-here",
+  "userId": "user123",
+  "objectKey": "raw/user123/video.mp4",
   "objectSize": 12345,
-  "status": "completed"
+  "overallAssessment": "CAUTION",
+  "status": "completed",
+  "reportS3Key": "reports/uuid-here.json",
+  "htmlReportS3Key": "reports/uuid-here.html",
+  "aiSummary": "This video contains moderate concerns...",
+  "warnings": []
 }
 ```
 
@@ -198,16 +311,37 @@ All three analyses run concurrently using Amazon Comprehend:
 
 ### Durable Execution Benefits
 - **Automatic Checkpointing**: Each step is checkpointed, allowing recovery from any point
-- **Long-Running Workflows**: Can run for up to 1 year with automatic state management
-- **No Compute Charges During Waits**: Function suspends while waiting for Transcribe
+- **Long-Running Workflows**: Can run for up to 7 days with automatic state management
+- **No Compute Charges During Waits**: Function suspends while waiting for Transcribe/Rekognition
 - **Fault Tolerance**: Automatic retry and recovery from failures
 - **Parallel Execution**: Multiple analyses run concurrently for faster results
+- **Configurable Timeouts**: 30-minute callback timeouts with 0 retries
+
+### Multi-Source Analysis
+- **Audio Transcription**: Full speech-to-text with timestamps
+- **Video Text Detection**: OCR for on-screen text with confidence filtering
+- **Combined Corpus**: Unified analysis of both audio and visual content
+- **Source Mapping**: Track which issues come from audio vs screen
 
 ### Content Analysis
 - **Comprehensive Safety Checks**: Toxicity detection for content moderation
 - **Emotional Intelligence**: Sentiment analysis for understanding tone
 - **Privacy Protection**: PII detection for compliance and data protection
 - **Scalable**: Handles large transcripts with automatic chunking
+- **Source-Level Breakdown**: Separate audio and screen issue tracking
+
+### AI-Powered Insights
+- **Executive Summaries**: Amazon Bedrock Nova Lite generates concise summaries
+- **Safety Assessments**: Automatic classification (Safe/Caution/Unsafe)
+- **Actionable Recommendations**: Clear guidance for content moderation
+- **Cost-Effective**: Uses Nova Lite for optimal price-performance
+
+### Reporting & Storage
+- **JSON Reports**: Complete detailed analysis in machine-readable format
+- **HTML Reports**: Beautiful, color-coded reports for human review
+- **DynamoDB Metadata**: Fast queries by user or approval status
+- **User-Based Access**: Multi-user support with userId extraction
+- **Approval Workflow**: Built-in PENDING_REVIEW status for manual review
 
 ## Deployment
 
@@ -228,34 +362,40 @@ This command:
 
 ### Upload a Video
 ```bash
-aws s3 cp video.mp4 s3://YOUR-BUCKET-NAME/raw/video.mp4
+aws s3 cp video.mp4 s3://YOUR-BUCKET-NAME/raw/user123/video.mp4
 ```
 
-The workflow automatically triggers when a file is uploaded to the `raw/` prefix.
+The workflow automatically triggers when a file is uploaded to the `raw/{userId}/` prefix. The userId is extracted from the path for multi-user support.
 
 ## Monitoring
 
 ### CloudWatch Logs
 Each function logs detailed information:
 - Scanner function: `/aws/lambda/scanner-function`
-- Callback function: `/aws/lambda/transcribe-callback-function`
+- Transcribe callback: `/aws/lambda/transcribe-callback-function`
+- Rekognition callback: `/aws/lambda/rekognition-callback-function`
 
 ### Key Log Events
 - Transcription job started
-- Callback token stored/retrieved
-- Transcript fetched
+- Rekognition text detection started
+- Callback tokens stored/retrieved
+- Transcript and video text fetched
+- Corpus built with source mapping
 - Parallel analysis started
 - Individual analysis results
-- Final workflow completion
+- AI summary generated
+- Reports saved to S3 and DynamoDB
+- Final workflow completion with full result
 
 ### X-Ray Tracing
 All functions have X-Ray tracing enabled for distributed tracing and performance analysis.
 
 ## Resources Created
 
-- **Lambda Functions**: 2 (Scanner, Transcribe Callback)
+- **Lambda Functions**: 3 (Scanner, Transcribe Callback, Rekognition Callback)
 - **S3 Bucket**: 1 (with EventBridge notifications enabled)
-- **DynamoDB Table**: 1 (callback tokens with TTL)
+- **DynamoDB Tables**: 2 (callback tokens with TTL, scan results with GSIs)
+- **SNS Topic**: 1 (Rekognition job notifications)
 - **IAM Roles**: Automatically created with least-privilege permissions
 - **EventBridge Rules**: 2 (S3 object created, Transcribe job completion)
 
