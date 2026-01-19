@@ -17,8 +17,7 @@ const comprehend = new ComprehendClient({});
 const rekognition = new RekognitionClient({});
 const bedrock = new BedrockRuntimeClient({});
 
-const CALLBACK_TOKEN_TABLE = process.env.CALLBACK_TOKEN_TABLE!;
-const SCAN_RESULTS_TABLE = process.env.SCAN_RESULTS_TABLE!;
+const SCANNER_TABLE = process.env.SCANNER_TABLE!;
 const REKOGNITION_ROLE_ARN = process.env.REKOGNITION_ROLE_ARN!;
 const REKOGNITION_SNS_TOPIC_ARN = process.env.REKOGNITION_SNS_TOPIC_ARN!;
 const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'global.amazon.nova-2-lite-v1:0';
@@ -82,6 +81,14 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
   const objectKey = event.detail.object.key;
   const objectSize = event.detail.object.size;
 
+  // Generate scanId at the start so it can be used throughout
+  const scanId = uuidv4();
+  const uploadedAt = new Date().toISOString();
+  
+  // Extract userId from objectKey (format: raw/{userId}/{filename})
+  const keyParts = objectKey.split('/');
+  const userId = keyParts.length >= 2 ? keyParts[1] : 'unknown';
+
   try {
 
   // Steps 1-4: Run Transcribe and Rekognition in parallel
@@ -92,15 +99,18 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
       const transcriptionResult = await childContext.waitForCallback<string>(
         'transcription-result',
         async (callbackToken: string) => {
-          const jobName = `transcribe-${Date.now()}-${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
+          const jobName = `transcribe-${Date.now()}-${scanId}_${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
           
-          logger.info('Starting transcription job', { jobName, objectKey });
+          logger.info('Starting transcription job', { jobName, objectKey, scanId });
           
           try {
             // Store callback token in DynamoDB
             await ddb.send(new PutItemCommand({
-              TableName: CALLBACK_TOKEN_TABLE,
+              TableName: SCANNER_TABLE,
               Item: marshall({
+                PK: `SCAN#${scanId}`,
+                SK: `TOKEN#${jobName}`,
+                EntityType: 'CallbackToken',
                 jobName,
                 callbackToken,
                 bucketName,
@@ -233,15 +243,18 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
         const rekognitionResult = await childContext.waitForCallback<string>(
           'rekognition-result',
           async (callbackToken: string) => {
-            const jobName = `rekognition-${Date.now()}-${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
+            const jobName = `rekognition-${Date.now()}-${scanId}_${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
             
-            logger.info('Starting Rekognition text detection job', { jobName, objectKey });
+            logger.info('Starting Rekognition text detection job', { jobName, objectKey, scanId });
             
             try {
               // Store callback token in DynamoDB
               await ddb.send(new PutItemCommand({
-                TableName: CALLBACK_TOKEN_TABLE,
+                TableName: SCANNER_TABLE,
                 Item: marshall({
+                  PK: `SCAN#${scanId}`,
+                  SK: `TOKEN#${jobName}`,
+                  EntityType: 'CallbackToken',
                   jobName,
                   callbackToken,
                   bucketName,
@@ -382,14 +395,15 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
     }
   ]);
 
-  // Extract results from parallel execution
-  const transcriptData = parallelResults.all[0].result as {
+  // Extract results from parallel execution with error handling
+  const transcriptData = parallelResults.all[0]?.result as {
     fullText: string;
     transcriptUri: string;
     transcript: any;
     transcriptionResult: string;
-  };
-  const rekognitionData = parallelResults.all[1].result as {
+  } | undefined;
+  
+  const rekognitionData = parallelResults.all[1]?.result as {
     videoTextData: {
       fullText: string;
       textSegments: Array<{
@@ -401,9 +415,14 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
       detectionCount: number;
     } | null;
     error: string | null;
-  };
-  const videoTextData = rekognitionData.videoTextData;
-  const rekognitionError = rekognitionData.error;
+  } | undefined;
+  
+  if (!transcriptData) {
+    throw new Error('Transcription failed - no transcript data returned');
+  }
+  
+  const videoTextData = rekognitionData?.videoTextData || null;
+  const rekognitionError = rekognitionData?.error || 'Rekognition branch failed to return data';
   const transcriptionResult = transcriptData.transcriptionResult;
 
   logger.info('Parallel jobs completed', {
@@ -887,13 +906,6 @@ Keep it concise and actionable.`;
   const scanRecord = await context.step('save-results', async () => {
     logger.info('Saving scan results');
     
-    const scanId = uuidv4();
-    const uploadedAt = new Date().toISOString();
-    
-    // Extract userId from objectKey (format: raw/{userId}/{filename})
-    const keyParts = objectKey.split('/');
-    const userId = keyParts.length >= 2 ? keyParts[1] : 'unknown';
-    
     // Determine overall assessment
     let overallAssessment: 'SAFE' | 'CAUTION' | 'UNSAFE' = 'SAFE';
     if (toxicityResults.hasToxicContent || piiResults.hasPII) {
@@ -902,6 +914,8 @@ Keep it concise and actionable.`;
       overallAssessment = 'CAUTION';
     }
     
+    const completedAt = new Date().toISOString();
+    
     // Build complete result object
     const completeResult = {
       scanId,
@@ -909,7 +923,7 @@ Keep it concise and actionable.`;
       objectKey,
       bucketName,
       uploadedAt,
-      completedAt: new Date().toISOString(),
+      completedAt,
       fileSize: objectSize,
       overallAssessment,
       status: videoTextData ? 'completed' : 'partial',
@@ -962,10 +976,17 @@ Keep it concise and actionable.`;
     
     logger.info('HTML report saved to S3', { htmlReportKey });
     
-    // Save metadata to DynamoDB
+    // Save metadata to DynamoDB with single table design
     await ddb.send(new PutItemCommand({
-      TableName: SCAN_RESULTS_TABLE,
+      TableName: SCANNER_TABLE,
       Item: marshall({
+        PK: `SCAN#${scanId}`,
+        SK: 'METADATA',
+        EntityType: 'ScanResult',
+        GSI1PK: `USER#${userId}`,
+        GSI1SK: uploadedAt,
+        GSI2PK: 'STATUS#PENDING_REVIEW',
+        GSI2SK: uploadedAt,
         scanId,
         userId,
         objectKey,
@@ -1021,8 +1042,11 @@ Keep it concise and actionable.`;
         
         // Store callback token in DynamoDB for approval workflow
         await ddb.send(new PutItemCommand({
-          TableName: CALLBACK_TOKEN_TABLE,
+          TableName: SCANNER_TABLE,
           Item: marshall({
+            PK: `SCAN#${scanRecord.scanId}`,
+            SK: 'TOKEN#approval',
+            EntityType: 'CallbackToken',
             jobName: `approval-${scanRecord.scanId}`,
             callbackToken,
             scanId: scanRecord.scanId,
@@ -1071,8 +1095,15 @@ Keep it concise and actionable.`;
     
     // Update DynamoDB with final approval status
     await ddb.send(new PutItemCommand({
-      TableName: SCAN_RESULTS_TABLE,
+      TableName: SCANNER_TABLE,
       Item: marshall({
+        PK: `SCAN#${scanRecord.scanId}`,
+        SK: 'METADATA',
+        EntityType: 'ScanResult',
+        GSI1PK: `USER#${scanRecord.userId}`,
+        GSI1SK: scanRecord.uploadedAt,
+        GSI2PK: `STATUS#${finalApprovalStatus}`,
+        GSI2SK: scanRecord.uploadedAt,
         scanId: scanRecord.scanId,
         userId: scanRecord.userId,
         objectKey,

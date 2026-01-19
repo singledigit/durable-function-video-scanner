@@ -11,7 +11,7 @@ const logger = new Logger({ serviceName: 'callback' });
 const lambda = new LambdaClient({});
 const ddb = new DynamoDBClient({});
 
-const CALLBACK_TOKEN_TABLE = process.env.CALLBACK_TOKEN_TABLE!;
+const SCANNER_TABLE = process.env.SCANNER_TABLE!;
 
 // Event type detection
 interface EventBridgeEvent {
@@ -78,6 +78,10 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | DirectInvokeE
       const status = message.Status;
       const jobId = message.JobId;
       
+      // Extract scanId from jobName (format: rekognition-timestamp-scanId_...)
+      const scanIdMatch = jobName.match(/rekognition-\d+-(.+)/);
+      const scanId = scanIdMatch ? scanIdMatch[1].split('_')[0] : null;
+      
       result = {
         jobName,
         jobId,
@@ -93,11 +97,12 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | DirectInvokeE
         };
       }
       
-      logger.info('Rekognition event detected', { jobName, jobId, status });
+      logger.info('Rekognition event detected', { jobName, jobId, status, scanId });
     }
     // Direct invoke (Approval)
     else if ('scanId' in event) {
-      jobName = `approval-${event.scanId}`;
+      const scanId = event.scanId;
+      jobName = `approval-${scanId}`;
       
       result = {
         approved: event.approved,
@@ -112,11 +117,51 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | DirectInvokeE
       throw new Error('Unknown event type');
     }
 
-    // Get callback token from DynamoDB
-    const getResult = await ddb.send(new GetItemCommand({
-      TableName: CALLBACK_TOKEN_TABLE,
-      Key: marshall({ jobName })
-    }));
+    // Get callback token from DynamoDB using single table design
+    // For approval events, we know the scanId directly
+    // For job events, we need to extract scanId from jobName or query by jobName
+    let getResult;
+    
+    if (jobName.startsWith('approval-')) {
+      // Direct lookup for approval tokens
+      const scanId = jobName.replace('approval-', '');
+      getResult = await ddb.send(new GetItemCommand({
+        TableName: SCANNER_TABLE,
+        Key: marshall({ 
+          PK: `SCAN#${scanId}`,
+          SK: 'TOKEN#approval'
+        })
+      }));
+    } else {
+      // For transcribe/rekognition, we need to find the token by jobName
+      // This requires a query since jobName is not in the key
+      // For now, extract scanId from jobName pattern
+      let scanId: string | null = null;
+      
+      if (jobName.startsWith('transcribe-')) {
+        // Format: transcribe-timestamp-scanId_...
+        const match = jobName.match(/transcribe-\d+-(.+)/);
+        scanId = match ? match[1].split('_')[0] : null;
+      } else if (jobName.startsWith('rekognition-')) {
+        // Format: rekognition-timestamp-scanId_...
+        const match = jobName.match(/rekognition-\d+-(.+)/);
+        scanId = match ? match[1].split('_')[0] : null;
+      }
+      
+      if (!scanId) {
+        throw new Error(`Could not extract scanId from jobName: ${jobName}`);
+      }
+      
+      const tokenSK = jobName.startsWith('transcribe-') ? `TOKEN#${jobName}` : `TOKEN#${jobName}`;
+      
+      getResult = await ddb.send(new GetItemCommand({
+        TableName: SCANNER_TABLE,
+        Key: marshall({ 
+          PK: `SCAN#${scanId}`,
+          SK: tokenSK
+        })
+      }));
+    }
 
     const item = getResult.Item ? unmarshall(getResult.Item) : null;
     const callbackToken = item?.callbackToken;
@@ -150,10 +195,38 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | DirectInvokeE
     }
 
     // Clean up the token from DynamoDB
-    await ddb.send(new DeleteItemCommand({
-      TableName: CALLBACK_TOKEN_TABLE,
-      Key: marshall({ jobName })
-    }));
+    if (jobName.startsWith('approval-')) {
+      const scanId = jobName.replace('approval-', '');
+      await ddb.send(new DeleteItemCommand({
+        TableName: SCANNER_TABLE,
+        Key: marshall({ 
+          PK: `SCAN#${scanId}`,
+          SK: 'TOKEN#approval'
+        })
+      }));
+    } else {
+      // Extract scanId for transcribe/rekognition tokens
+      let scanId: string | null = null;
+      
+      if (jobName.startsWith('transcribe-')) {
+        const match = jobName.match(/transcribe-\d+-(.+)/);
+        scanId = match ? match[1].split('_')[0] : null;
+      } else if (jobName.startsWith('rekognition-')) {
+        const match = jobName.match(/rekognition-\d+-(.+)/);
+        scanId = match ? match[1].split('_')[0] : null;
+      }
+      
+      if (scanId) {
+        const tokenSK = `TOKEN#${jobName}`;
+        await ddb.send(new DeleteItemCommand({
+          TableName: SCANNER_TABLE,
+          Key: marshall({ 
+            PK: `SCAN#${scanId}`,
+            SK: tokenSK
+          })
+        }));
+      }
+    }
     
     logger.info('Callback token cleaned up from DynamoDB', { jobName });
 

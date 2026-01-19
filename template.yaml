@@ -12,59 +12,50 @@ Globals:
     Tracing: Active
 
 Resources:
-  # DynamoDB table for callback tokens
-  CallbackTokenTable:
+  # Single DynamoDB table for all scanner data
+  ScannerTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: scanner-callback-tokens
+      TableName: scanner-table
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: jobName
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: GSI2PK
+          AttributeType: S
+        - AttributeName: GSI2SK
           AttributeType: S
       KeySchema:
-        - AttributeName: jobName
+        - AttributeName: PK
           KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: GSI2PK
+              KeyType: HASH
+            - AttributeName: GSI2SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
-
-  # DynamoDB table for scan results
-  ScanResultsTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: scanner-results
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: scanId
-          AttributeType: S
-        - AttributeName: userId
-          AttributeType: S
-        - AttributeName: uploadedAt
-          AttributeType: S
-        - AttributeName: approvalStatus
-          AttributeType: S
-      KeySchema:
-        - AttributeName: scanId
-          KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: userId-uploadedAt-index
-          KeySchema:
-            - AttributeName: userId
-              KeyType: HASH
-            - AttributeName: uploadedAt
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-        - IndexName: approvalStatus-uploadedAt-index
-          KeySchema:
-            - AttributeName: approvalStatus
-              KeyType: HASH
-            - AttributeName: uploadedAt
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
@@ -133,8 +124,7 @@ Resources:
         Variables:
           POWERTOOLS_SERVICE_NAME: scanner
           POWERTOOLS_LOG_LEVEL: INFO
-          CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
-          SCAN_RESULTS_TABLE: !Ref ScanResultsTable
+          SCANNER_TABLE: !Ref ScannerTable
           REKOGNITION_ROLE_ARN: !GetAtt RekognitionServiceRole.Arn
           REKOGNITION_SNS_TOPIC_ARN: !Ref RekognitionNotificationTopic
           BEDROCK_MODEL_ID: global.amazon.nova-2-lite-v1:0
@@ -146,10 +136,8 @@ Resources:
             BucketName: !Ref ScannerBucket
         - S3WritePolicy:
             BucketName: !Ref ScannerBucket
-        - DynamoDBWritePolicy:
-            TableName: !Ref CallbackTokenTable
         - DynamoDBCrudPolicy:
-            TableName: !Ref ScanResultsTable
+            TableName: !Ref ScannerTable
         - Statement:
             - Effect: Allow
               Action:
@@ -213,10 +201,10 @@ Resources:
         Variables:
           POWERTOOLS_SERVICE_NAME: callback
           POWERTOOLS_LOG_LEVEL: INFO
-          CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
+          SCANNER_TABLE: !Ref ScannerTable
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref CallbackTokenTable
+            TableName: !Ref ScannerTable
         - Statement:
             - Effect: Allow
               Action:
@@ -264,6 +252,6 @@ Outputs:
     Description: Unified Callback Function ARN
     Value: !GetAtt CallbackFunction.Arn
 
-  ScanResultsTableName:
-    Description: DynamoDB table for scan results
-    Value: !Ref ScanResultsTable
+  ScannerTableName:
+    Description: DynamoDB table for scanner data
+    Value: !Ref ScannerTable

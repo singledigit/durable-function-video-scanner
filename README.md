@@ -26,7 +26,7 @@ graph TD
     D1 -->|waitForCallback| F1[Function Suspends]
     
     E1 -->|Job Complete| G1[EventBridge Event]
-    G1 --> H1[Transcribe Callback Function]
+    G1 --> H1[Callback Function]
     H1 -->|Get Token| DB1
     H1 -->|Send Callback| I1[Resume Branch 1]
     
@@ -40,7 +40,7 @@ graph TD
     D2 -->|waitForCallback| F2[Function Suspends]
     
     E2 -->|Job Complete| G2[SNS Notification]
-    G2 --> H2[Rekognition Callback Function]
+    G2 --> H2[Callback Function]
     H2 -->|Get Token| DB2
     H2 -->|Send Callback| I2[Resume Branch 2]
     
@@ -82,7 +82,7 @@ graph TD
     AN[Step 10: Wait for Approval] -->|Store Token| AO[DynamoDB: Callback Tokens]
     AN -->|waitForCallback| AP[Function Suspends - 3 Days]
     
-    AP -->|Human Decision| AQ[Approval Callback Function]
+    AP -->|Human Decision| AQ[Callback Function]
     AP -->|Timeout 3 Days| AR[Auto-Reject]
     
     AQ -->|Get Token| AO
@@ -126,12 +126,15 @@ graph TD
 ### Components
 
 - **Scanner Function** (Durable): Main orchestrator that coordinates the entire workflow
-- **Callback Function**: Unified handler for Transcribe, Rekognition, and Approval callbacks
+- **Callback Function**: Unified handler that processes callbacks from three sources:
+  - EventBridge events (Transcribe job completion)
+  - SNS notifications (Rekognition job completion)
+  - Direct invocation (Human approval decisions)
 - **S3 Bucket**: Stores uploaded videos, transcripts, and scan reports
 - **DynamoDB Tables**: 
   - Callback tokens for durable execution (with TTL)
   - Scan results with user-based and approval status indexes
-- **EventBridge**: Routes S3 and Transcribe events to Lambda functions
+- **EventBridge**: Routes S3 object creation and Transcribe completion events
 - **SNS Topic**: Routes Rekognition completion notifications
 
 ## Durable Function Workflow
@@ -190,6 +193,7 @@ childContext.waitForCallback('transcription-result', async (callbackToken) => {
 **Step 2: Fetch Transcript from S3**
 ```
 childContext.step('fetch-transcript', async () => {
+  // Fetch full transcription job details from Transcribe
   // Parse transcript URI (supports s3:// and https:// formats)
   // Fetch transcript JSON from S3
   // Extract full text and word-level timestamps
@@ -197,8 +201,9 @@ childContext.step('fetch-transcript', async () => {
 ```
 
 **What happens:**
-- Parses the transcript URI from Transcribe result
-- Handles both S3 URI (`s3://bucket/key`) and HTTPS URL formats
+- Fetches complete job details using GetTranscriptionJobCommand
+- Extracts transcript URI from job details
+- Parses the transcript URI (handles both S3 URI and HTTPS URL formats)
 - Fetches the transcript JSON file from S3
 - Extracts the full transcript text with timestamps
 - Returns text and metadata for next step
@@ -510,8 +515,7 @@ aws lambda invoke \
 ### CloudWatch Logs
 Each function logs detailed information:
 - Scanner function: `/aws/lambda/scanner-function`
-- Transcribe callback: `/aws/lambda/transcribe-callback-function`
-- Rekognition callback: `/aws/lambda/rekognition-callback-function`
+- Unified callback: `/aws/lambda/callback-function`
 
 ### Key Log Events
 - Transcription job started
@@ -553,6 +557,22 @@ All functions have X-Ray tracing enabled for distributed tracing and performance
 
 ## Development
 
+### Dependency Management
+
+Use the Makefile to manage dependencies across all Lambda functions:
+
+```bash
+# Clean and install all dependencies
+make
+
+# Or explicitly
+make install
+```
+
+This will:
+- Remove `node_modules` and `package-lock.json` from all function folders
+- Run `npm install` in each folder with a `package.json`
+
 ### Project Structure
 ```
 .
@@ -561,18 +581,11 @@ All functions have X-Ray tracing enabled for distributed tracing and performance
 │   │   ├── index.ts
 │   │   ├── package.json
 │   │   └── tsconfig.json
-│   ├── transcribe-callback/  # Transcribe event handler
-│   │   ├── index.ts
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   ├── rekognition-callback/ # Rekognition event handler
-│   │   ├── index.ts
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   └── approval-callback/    # Human approval handler
-│       ├── index.ts
+│   └── callback/             # Unified callback handler
+│       ├── index.ts          # Handles Transcribe, Rekognition, and Approval
 │       ├── package.json
 │       └── tsconfig.json
+├── Makefile                  # Dependency management
 ├── template.yaml             # SAM template
 └── samconfig.toml           # SAM configuration
 ```
