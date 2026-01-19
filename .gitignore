@@ -6,6 +6,9 @@ node_modules/
 package-lock.json
 yarn.lock
 
+# Test videos
+videos/
+
 # TypeScript build output
 *.js
 *.js.map

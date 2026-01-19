@@ -30,6 +30,44 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
+  # DynamoDB table for scan results
+  ScanResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: scanner-results
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: scanId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: uploadedAt
+          AttributeType: S
+        - AttributeName: approvalStatus
+          AttributeType: S
+      KeySchema:
+        - AttributeName: scanId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: userId-uploadedAt-index
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: uploadedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: approvalStatus-uploadedAt-index
+          KeySchema:
+            - AttributeName: approvalStatus
+              KeyType: HASH
+            - AttributeName: uploadedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
   # S3 Bucket for uploads
   ScannerBucket:
     Type: AWS::S3::Bucket
@@ -96,10 +134,12 @@ Resources:
           POWERTOOLS_SERVICE_NAME: scanner
           POWERTOOLS_LOG_LEVEL: INFO
           CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
+          SCAN_RESULTS_TABLE: !Ref ScanResultsTable
           REKOGNITION_ROLE_ARN: !GetAtt RekognitionServiceRole.Arn
           REKOGNITION_SNS_TOPIC_ARN: !Ref RekognitionNotificationTopic
+          BEDROCK_MODEL_ID: global.amazon.nova-2-lite-v1:0
       DurableConfig:
-        ExecutionTimeout: 3600
+        ExecutionTimeout: 604800
         RetentionPeriodInDays: 30
       Policies:
         - S3ReadPolicy:
@@ -108,6 +148,8 @@ Resources:
             BucketName: !Ref ScannerBucket
         - DynamoDBWritePolicy:
             TableName: !Ref CallbackTokenTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ScanResultsTable
         - Statement:
             - Effect: Allow
               Action:
@@ -130,6 +172,10 @@ Resources:
               Action:
                 - iam:PassRole
               Resource: !GetAtt RekognitionServiceRole.Arn
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: '*'
       Events:
         S3ObjectCreated:
           Type: EventBridgeRule
@@ -255,3 +301,7 @@ Outputs:
   RekognitionCallbackFunctionArn:
     Description: Rekognition Callback Function ARN
     Value: !GetAtt RekognitionCallbackFunction.Arn
+
+  ScanResultsTableName:
+    Description: DynamoDB table for scan results
+    Value: !Ref ScanResultsTable
