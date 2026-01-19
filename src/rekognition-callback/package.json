@@ -1,20 +1,16 @@
 {
-  "name": "scanner-function",
+  "name": "rekognition-callback-function",
   "version": "1.0.0",
-  "description": "Scanner durable function",
+  "description": "Rekognition callback function",
   "type": "module",
   "main": "index.ts",
   "scripts": {
     "build": "tsc"
   },
   "dependencies": {
-    "@aws/durable-execution-sdk-js": "^1.0.0",
     "@aws-lambda-powertools/logger": "^2.0.0",
-    "@aws-sdk/client-comprehend": "^3.0.0",
     "@aws-sdk/client-dynamodb": "^3.0.0",
-    "@aws-sdk/client-rekognition": "^3.0.0",
-    "@aws-sdk/client-s3": "^3.0.0",
-    "@aws-sdk/client-transcribe": "^3.0.0",
+    "@aws-sdk/client-lambda": "^3.0.0",
     "@aws-sdk/util-dynamodb": "^3.0.0"
   },
   "devDependencies": {

@@ -43,6 +43,42 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
+  # SNS Topic for Rekognition job completion notifications
+  RekognitionNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: rekognition-job-notifications
+
+  # IAM Role for Rekognition to access S3 and publish to SNS
+  RekognitionServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rekognition.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RekognitionS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub '${ScannerBucket.Arn}/*'
+        - PolicyName: RekognitionSNSPublish
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref RekognitionNotificationTopic
+
   # Lambda Durable Function
   ScannerFunction:
     Type: AWS::Serverless::Function
@@ -60,6 +96,8 @@ Resources:
           POWERTOOLS_SERVICE_NAME: scanner
           POWERTOOLS_LOG_LEVEL: INFO
           CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
+          REKOGNITION_ROLE_ARN: !GetAtt RekognitionServiceRole.Arn
+          REKOGNITION_SNS_TOPIC_ARN: !Ref RekognitionNotificationTopic
       DurableConfig:
         ExecutionTimeout: 3600
         RetentionPeriodInDays: 30
@@ -83,6 +121,15 @@ Resources:
                 - comprehend:DetectSentiment
                 - comprehend:DetectPiiEntities
               Resource: '*'
+            - Effect: Allow
+              Action:
+                - rekognition:StartTextDetection
+                - rekognition:GetTextDetection
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource: !GetAtt RekognitionServiceRole.Arn
       Events:
         S3ObjectCreated:
           Type: EventBridgeRule
@@ -158,6 +205,44 @@ Resources:
         EntryPoints:
           - index.ts
 
+  # Rekognition Callback Function
+  RekognitionCallbackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: rekognition-callback-function
+      CodeUri: src/rekognition-callback/
+      Handler: index.handler
+      Description: Handles Rekognition completion events from SNS and sends callbacks
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: rekognition-callback
+          POWERTOOLS_LOG_LEVEL: INFO
+          CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CallbackTokenTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:SendDurableExecutionCallbackSuccess
+                - lambda:SendDurableExecutionCallbackFailure
+              Resource: 
+                - !GetAtt ScannerFunction.Arn
+                - !Sub '${ScannerFunction.Arn}:*'
+      Events:
+        RekognitionSNS:
+          Type: SNS
+          Properties:
+            Topic: !Ref RekognitionNotificationTopic
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
 Outputs:
   ScannerBucketName:
     Description: S3 Bucket for uploads
@@ -166,3 +251,7 @@ Outputs:
   ScannerFunctionArn:
     Description: Scanner Function ARN
     Value: !GetAtt ScannerFunction.Arn
+
+  RekognitionCallbackFunctionArn:
+    Description: Rekognition Callback Function ARN
+    Value: !GetAtt RekognitionCallbackFunction.Arn
