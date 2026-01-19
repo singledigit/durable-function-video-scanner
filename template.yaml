@@ -289,6 +289,39 @@ Resources:
         EntryPoints:
           - index.ts
 
+  # Approval Callback Function
+  ApprovalCallbackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: approval-callback-function
+      CodeUri: src/approval-callback/
+      Handler: index.handler
+      Description: Handles human approval decisions and sends callbacks
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: approval-callback
+          POWERTOOLS_LOG_LEVEL: INFO
+          CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CallbackTokenTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:SendDurableExecutionCallbackSuccess
+                - lambda:SendDurableExecutionCallbackFailure
+              Resource: 
+                - !GetAtt ScannerFunction.Arn
+                - !Sub '${ScannerFunction.Arn}:*'
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
 Outputs:
   ScannerBucketName:
     Description: S3 Bucket for uploads
@@ -301,6 +334,10 @@ Outputs:
   RekognitionCallbackFunctionArn:
     Description: Rekognition Callback Function ARN
     Value: !GetAtt RekognitionCallbackFunction.Arn
+
+  ApprovalCallbackFunctionArn:
+    Description: Approval Callback Function ARN
+    Value: !GetAtt ApprovalCallbackFunction.Arn
 
   ScanResultsTableName:
     Description: DynamoDB table for scan results

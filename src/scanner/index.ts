@@ -87,9 +87,9 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
   // Steps 1-4: Run Transcribe and Rekognition in parallel
   const parallelResults = await context.parallel([
     // Branch 1: Transcription workflow
-    async () => {
+    async (childContext) => {
       // Step 1: Start transcription and wait for callback
-      const transcriptionResult = await context.waitForCallback<string>(
+      const transcriptionResult = await childContext.waitForCallback<string>(
         'transcription-result',
         async (callbackToken: string) => {
           const jobName = `transcribe-${Date.now()}-${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
@@ -157,7 +157,7 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
       );
 
       // Step 2: Fetch transcript from S3
-      const transcriptData = await context.step('fetch-transcript', async () => {
+      const transcriptData = await childContext.step('fetch-transcript', async () => {
         logger.info('Fetching transcript from S3', { transcriptionResult });
         
         const parsedResult = typeof transcriptionResult === 'string' 
@@ -219,10 +219,10 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
     },
 
     // Branch 2: Rekognition workflow
-    async () => {
+    async (childContext) => {
       try {
         // Step 3: Start Rekognition and wait for callback
-        const rekognitionResult = await context.waitForCallback<string>(
+        const rekognitionResult = await childContext.waitForCallback<string>(
           'rekognition-result',
           async (callbackToken: string) => {
             const jobName = `rekognition-${Date.now()}-${objectKey.replace(/[^a-zA-Z0-9-_]/g, '_')}`;
@@ -284,7 +284,7 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
         );
 
         // Step 4: Fetch Rekognition results and extract video text
-        const videoTextData = await context.step('fetch-video-text', async () => {
+        const videoTextData = await childContext.step('fetch-video-text', async () => {
           logger.info('Fetching Rekognition results', { rekognitionResult });
           
           const parsedResult = typeof rekognitionResult === 'string' 
@@ -974,7 +974,7 @@ Keep it concise and actionable.`;
         aiSummary: aiSummary.summary,
         reportS3Key: jsonReportKey,
         htmlReportS3Key: htmlReportKey
-      })
+      }, { removeUndefinedValues: true })
     }));
     
     logger.info('Scan metadata saved to DynamoDB', { scanId, userId });
@@ -982,16 +982,129 @@ Keep it concise and actionable.`;
     return {
       scanId,
       userId,
+      uploadedAt,
       jsonReportKey,
       htmlReportKey,
       overallAssessment
     };
   });
 
-  logger.info('Scanner completed successfully', { 
+  // Step 10: Wait for human approval with 3-day timeout
+  let approvalResult: {
+    approved: boolean;
+    reviewedBy: string;
+    reviewedAt: string;
+    comments?: string;
+  };
+  
+  try {
+    approvalResult = await context.waitForCallback<{
+      approved: boolean;
+      reviewedBy: string;
+      reviewedAt: string;
+      comments?: string;
+    }>(
+      'human-approval',
+      async (callbackToken: string) => {
+        logger.info('Waiting for human approval', { 
+          scanId: scanRecord.scanId,
+          callbackToken 
+        });
+        
+        // Store callback token in DynamoDB for approval workflow
+        await ddb.send(new PutItemCommand({
+          TableName: CALLBACK_TOKEN_TABLE,
+          Item: marshall({
+            jobName: `approval-${scanRecord.scanId}`,
+            callbackToken,
+            scanId: scanRecord.scanId,
+            userId: scanRecord.userId,
+            bucketName,
+            objectKey,
+            createdAt: new Date().toISOString(),
+            ttl: Math.floor(Date.now() / 1000) + (3 * 86400) // 3 days TTL
+          })
+        }));
+        
+        logger.info('Approval callback token stored', { 
+          scanId: scanRecord.scanId,
+          expiresIn: '3 days'
+        });
+      },
+      {
+        timeout: { seconds: 259200 }, // 3 days = 259200 seconds
+        retryStrategy: CALLBACK_RETRY_STRATEGY
+      }
+    );
+  } catch (error) {
+    // Handle timeout - auto-reject after 3 days
+    logger.warn('Approval timeout - auto-rejecting', {
+      scanId: scanRecord.scanId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    
+    approvalResult = {
+      approved: false,
+      reviewedBy: 'system',
+      reviewedAt: new Date().toISOString(),
+      comments: 'Auto-rejected due to 3-day approval timeout'
+    };
+  }
+
+  // Step 11: Update final approval status
+  const finalStatus = await context.step('update-approval-status', async () => {
+    logger.info('Updating approval status', { 
+      scanId: scanRecord.scanId,
+      approved: approvalResult.approved 
+    });
+    
+    const finalApprovalStatus = approvalResult.approved ? 'APPROVED' : 'REJECTED';
+    const completedAt = new Date().toISOString();
+    
+    // Update DynamoDB with final approval status
+    await ddb.send(new PutItemCommand({
+      TableName: SCAN_RESULTS_TABLE,
+      Item: marshall({
+        scanId: scanRecord.scanId,
+        userId: scanRecord.userId,
+        objectKey,
+        bucketName,
+        status: videoTextData ? 'completed' : 'partial',
+        approvalStatus: finalApprovalStatus,
+        uploadedAt: scanRecord.uploadedAt,
+        completedAt,
+        reviewedAt: approvalResult.reviewedAt,
+        reviewedBy: approvalResult.reviewedBy,
+        reviewComments: approvalResult.comments || '',
+        fileSize: objectSize,
+        overallAssessment: scanRecord.overallAssessment,
+        hasToxicContent: toxicityResults.hasToxicContent,
+        hasPII: piiResults.hasPII,
+        sentiment: sentimentResults.sentiment,
+        aiSummary: aiSummary.summary,
+        reportS3Key: scanRecord.jsonReportKey,
+        htmlReportS3Key: scanRecord.htmlReportKey
+      }, { removeUndefinedValues: true })
+    }));
+    
+    logger.info('Approval status updated in DynamoDB', { 
+      scanId: scanRecord.scanId,
+      finalApprovalStatus 
+    });
+    
+    return {
+      approvalStatus: finalApprovalStatus,
+      reviewedBy: approvalResult.reviewedBy,
+      reviewedAt: approvalResult.reviewedAt,
+      comments: approvalResult.comments
+    };
+  });
+
+  logger.info('Scanner completed successfully with approval', { 
     scanId: scanRecord.scanId,
     userId: scanRecord.userId,
-    overallAssessment: scanRecord.overallAssessment
+    overallAssessment: scanRecord.overallAssessment,
+    approvalStatus: finalStatus.approvalStatus
   });
 
   const result = {
@@ -1001,6 +1114,10 @@ Keep it concise and actionable.`;
     objectSize,
     overallAssessment: scanRecord.overallAssessment,
     status: videoTextData ? 'completed' : 'partial',
+    approvalStatus: finalStatus.approvalStatus,
+    reviewedBy: finalStatus.reviewedBy,
+    reviewedAt: finalStatus.reviewedAt,
+    reviewComments: finalStatus.comments,
     reportS3Key: scanRecord.jsonReportKey,
     htmlReportS3Key: scanRecord.htmlReportKey,
     aiSummary: aiSummary.summary,

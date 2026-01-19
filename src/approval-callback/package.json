@@ -1,0 +1,20 @@
+{
+  "name": "approval-callback",
+  "version": "1.0.0",
+  "description": "Lambda function to handle human approval callbacks",
+  "main": "index.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@aws-lambda-powertools/logger": "^2.10.0",
+    "@aws-sdk/client-dynamodb": "^3.713.0",
+    "@aws-sdk/client-lambda": "^3.713.0",
+    "@aws-sdk/util-dynamodb": "^3.713.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

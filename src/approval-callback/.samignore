@@ -1,0 +1,13 @@
+*.ts
+tsconfig.json
+node_modules/
+package-lock.json
+*.md
+.git/
+.gitignore
+*.test.*
+*.spec.*
+__tests__/
+coverage/
+.env
+.DS_Store
