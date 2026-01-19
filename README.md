@@ -126,9 +126,7 @@ graph TD
 ### Components
 
 - **Scanner Function** (Durable): Main orchestrator that coordinates the entire workflow
-- **Transcribe Callback Function**: Handles Amazon Transcribe completion events
-- **Rekognition Callback Function**: Handles Amazon Rekognition completion events via SNS
-- **Approval Callback Function**: Handles human approval decisions with 3-day timeout
+- **Callback Function**: Unified handler for Transcribe, Rekognition, and Approval callbacks
 - **S3 Bucket**: Stores uploaded videos, transcripts, and scan reports
 - **DynamoDB Tables**: 
   - Callback tokens for durable execution (with TTL)
@@ -494,13 +492,13 @@ After the scan completes, the video enters PENDING_REVIEW status and waits for h
 ```bash
 # Approve a video
 aws lambda invoke \
-  --function-name approval-callback-function \
+  --function-name callback-function \
   --payload '{"scanId":"YOUR-SCAN-ID","approved":true,"reviewedBy":"reviewer@example.com","comments":"Looks good"}' \
   response.json
 
 # Reject a video
 aws lambda invoke \
-  --function-name approval-callback-function \
+  --function-name callback-function \
   --payload '{"scanId":"YOUR-SCAN-ID","approved":false,"reviewedBy":"reviewer@example.com","comments":"Contains inappropriate content"}' \
   response.json
 ```
@@ -532,7 +530,7 @@ All functions have X-Ray tracing enabled for distributed tracing and performance
 
 ## Resources Created
 
-- **Lambda Functions**: 4 (Scanner, Transcribe Callback, Rekognition Callback, Approval Callback)
+- **Lambda Functions**: 2 (Scanner, Unified Callback)
 - **S3 Bucket**: 1 (with EventBridge notifications enabled)
 - **DynamoDB Tables**: 2 (callback tokens with TTL, scan results with GSIs)
 - **SNS Topic**: 1 (Rekognition job notifications)

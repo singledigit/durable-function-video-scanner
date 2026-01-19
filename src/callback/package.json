@@ -1,7 +1,7 @@
 {
-  "name": "approval-callback",
+  "name": "callback",
   "version": "1.0.0",
-  "description": "Lambda function to handle human approval callbacks",
+  "description": "Unified callback handler for durable execution",
   "main": "index.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

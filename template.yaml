@@ -201,17 +201,17 @@ Resources:
         EntryPoints:
           - index.ts
 
-  # Transcribe Callback Function
-  TranscribeCallbackFunction:
+  # Unified Callback Function
+  CallbackFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: transcribe-callback-function
-      CodeUri: src/transcribe-callback/
+      FunctionName: callback-function
+      CodeUri: src/callback/
       Handler: index.handler
-      Description: Handles Transcribe completion events and sends callbacks
+      Description: Unified callback handler for Transcribe, Rekognition, and Approval events
       Environment:
         Variables:
-          POWERTOOLS_SERVICE_NAME: transcribe-callback
+          POWERTOOLS_SERVICE_NAME: callback
           POWERTOOLS_LOG_LEVEL: INFO
           CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
       Policies:
@@ -225,10 +225,6 @@ Resources:
               Resource: 
                 - !GetAtt ScannerFunction.Arn
                 - !Sub '${ScannerFunction.Arn}:*'
-            - Effect: Allow
-              Action:
-                - transcribe:GetTranscriptionJob
-              Resource: '*'
       Events:
         TranscribeComplete:
           Type: EventBridgeRule
@@ -242,77 +238,10 @@ Resources:
                 TranscriptionJobStatus:
                   - COMPLETED
                   - FAILED
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2022
-        Sourcemap: true
-        EntryPoints:
-          - index.ts
-
-  # Rekognition Callback Function
-  RekognitionCallbackFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: rekognition-callback-function
-      CodeUri: src/rekognition-callback/
-      Handler: index.handler
-      Description: Handles Rekognition completion events from SNS and sends callbacks
-      Environment:
-        Variables:
-          POWERTOOLS_SERVICE_NAME: rekognition-callback
-          POWERTOOLS_LOG_LEVEL: INFO
-          CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref CallbackTokenTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - lambda:SendDurableExecutionCallbackSuccess
-                - lambda:SendDurableExecutionCallbackFailure
-              Resource: 
-                - !GetAtt ScannerFunction.Arn
-                - !Sub '${ScannerFunction.Arn}:*'
-      Events:
         RekognitionSNS:
           Type: SNS
           Properties:
             Topic: !Ref RekognitionNotificationTopic
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2022
-        Sourcemap: true
-        EntryPoints:
-          - index.ts
-
-  # Approval Callback Function
-  ApprovalCallbackFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: approval-callback-function
-      CodeUri: src/approval-callback/
-      Handler: index.handler
-      Description: Handles human approval decisions and sends callbacks
-      Environment:
-        Variables:
-          POWERTOOLS_SERVICE_NAME: approval-callback
-          POWERTOOLS_LOG_LEVEL: INFO
-          CALLBACK_TOKEN_TABLE: !Ref CallbackTokenTable
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref CallbackTokenTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - lambda:SendDurableExecutionCallbackSuccess
-                - lambda:SendDurableExecutionCallbackFailure
-              Resource: 
-                - !GetAtt ScannerFunction.Arn
-                - !Sub '${ScannerFunction.Arn}:*'
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -331,13 +260,9 @@ Outputs:
     Description: Scanner Function ARN
     Value: !GetAtt ScannerFunction.Arn
 
-  RekognitionCallbackFunctionArn:
-    Description: Rekognition Callback Function ARN
-    Value: !GetAtt RekognitionCallbackFunction.Arn
-
-  ApprovalCallbackFunctionArn:
-    Description: Approval Callback Function ARN
-    Value: !GetAtt ApprovalCallbackFunction.Arn
+  CallbackFunctionArn:
+    Description: Unified Callback Function ARN
+    Value: !GetAtt CallbackFunction.Arn
 
   ScanResultsTableName:
     Description: DynamoDB table for scan results

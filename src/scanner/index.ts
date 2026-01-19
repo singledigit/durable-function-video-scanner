@@ -1,6 +1,6 @@
 import { withDurableExecution, DurableContext } from '@aws/durable-execution-sdk-js';
 import { Logger } from '@aws-lambda-powertools/logger';
-import { TranscribeClient, StartTranscriptionJobCommand } from '@aws-sdk/client-transcribe';
+import { TranscribeClient, StartTranscriptionJobCommand, GetTranscriptionJobCommand } from '@aws-sdk/client-transcribe';
 import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
@@ -158,16 +158,24 @@ export const handler = withDurableExecution(async (event: S3Event, context: Dura
 
       // Step 2: Fetch transcript from S3
       const transcriptData = await childContext.step('fetch-transcript', async () => {
-        logger.info('Fetching transcript from S3', { transcriptionResult });
+        logger.info('Processing transcription callback result', { transcriptionResult });
         
         const parsedResult = typeof transcriptionResult === 'string' 
           ? JSON.parse(transcriptionResult) 
           : transcriptionResult;
         
-        const transcriptUri = parsedResult.transcriptUri;
+        // Fetch full transcription job details
+        const jobDetails = await transcribe.send(new GetTranscriptionJobCommand({
+          TranscriptionJobName: parsedResult.jobName
+        }));
+        
+        const transcriptUri = jobDetails.TranscriptionJob?.Transcript?.TranscriptFileUri;
+        
         if (!transcriptUri) {
-          throw new Error('No transcript URI found in transcription result');
+          throw new Error('No transcript URI found in transcription job details');
         }
+        
+        logger.info('Fetching transcript from S3', { transcriptUri });
         
         let bucket: string;
         let key: string;
