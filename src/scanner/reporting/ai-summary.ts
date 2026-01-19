@@ -1,5 +1,6 @@
 import { InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { logger, bedrock, BEDROCK_MODEL_ID, ToxicityResult, SentimentResult, PiiResult, VideoTextData } from '../config';
+import { withRetry, BedrockError } from '../errors';
 
 export async function generateAISummary(
   toxicityResults: ToxicityResult,
@@ -82,7 +83,12 @@ Keep it concise and actionable.`;
       body: JSON.stringify(requestBody)
     });
 
-    const response = await bedrock.send(command);
+    const response = await withRetry(
+      async () => bedrock.send(command),
+      undefined,
+      logger
+    );
+    
     const responseBody = JSON.parse(new TextDecoder().decode(response.body));
     
     const summaryText = responseBody.output?.message?.content?.[0]?.text || 'Summary generation failed';
@@ -103,6 +109,7 @@ Keep it concise and actionable.`;
       errorName: error instanceof Error ? error.name : 'Unknown'
     });
     
+    // Graceful degradation - return error message instead of failing
     return {
       summary: 'AI summary generation failed. Please review raw analysis results.',
       error: error instanceof Error ? error.message : String(error),

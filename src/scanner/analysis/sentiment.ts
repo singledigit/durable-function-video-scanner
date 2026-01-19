@@ -1,5 +1,6 @@
 import { DetectSentimentCommand } from '@aws-sdk/client-comprehend';
 import { logger, comprehend, SentimentResult } from '../config';
+import { withRetry, AnalysisError } from '../errors';
 
 export async function analyzeSentiment(text: string): Promise<SentimentResult> {
   logger.info('Analyzing sentiment', { textLength: text.length });
@@ -21,20 +22,37 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
     ? text.substring(0, Math.floor(text.length * (MAX_BYTES / textBytes)))
     : text;
   
-  const response = await comprehend.send(new DetectSentimentCommand({
-    Text: textToAnalyze,
-    LanguageCode: 'en'
-  }));
-  
-  logger.info('Sentiment analysis completed', { 
-    sentiment: response.Sentiment,
-    truncated: textBytes > MAX_BYTES
-  });
-  
-  return {
-    sentiment: response.Sentiment!,
-    sentimentScore: response.SentimentScore,
-    truncated: textBytes > MAX_BYTES,
-    analyzedBytes: Buffer.byteLength(textToAnalyze, 'utf8')
-  };
+  try {
+    const response = await withRetry(
+      async () => comprehend.send(new DetectSentimentCommand({
+        Text: textToAnalyze,
+        LanguageCode: 'en'
+      })),
+      undefined,
+      logger
+    );
+    
+    logger.info('Sentiment analysis completed', { 
+      sentiment: response.Sentiment,
+      truncated: textBytes > MAX_BYTES
+    });
+    
+    return {
+      sentiment: response.Sentiment!,
+      sentimentScore: response.SentimentScore,
+      truncated: textBytes > MAX_BYTES,
+      analyzedBytes: Buffer.byteLength(textToAnalyze, 'utf8')
+    };
+  } catch (error) {
+    logger.error('Sentiment analysis failed', {
+      error: error instanceof Error ? error.message : String(error),
+      errorName: error instanceof Error ? error.name : 'Unknown'
+    });
+    
+    throw new AnalysisError(
+      'Failed to analyze sentiment',
+      'sentiment',
+      error instanceof Error ? error : undefined
+    );
+  }
 }

@@ -2,6 +2,7 @@ import { DurableContext } from '@aws/durable-execution-sdk-js';
 import { PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { logger, ddb, SCANNER_TABLE, CALLBACK_RETRY_STRATEGY } from '../config';
+import { withRetry, StorageError } from '../errors';
 
 export async function saveScanMetadata(
   scanId: string,
@@ -23,36 +24,56 @@ export async function saveScanMetadata(
   
   const completedAt = new Date().toISOString();
   
-  await ddb.send(new PutItemCommand({
-    TableName: SCANNER_TABLE,
-    Item: marshall({
-      PK: `SCAN#${scanId}`,
-      SK: 'METADATA',
-      EntityType: 'ScanResult',
-      GSI1PK: `USER#${userId}`,
-      GSI1SK: uploadedAt,
-      GSI2PK: 'STATUS#PENDING_REVIEW',
-      GSI2SK: uploadedAt,
+  try {
+    await withRetry(
+      async () => ddb.send(new PutItemCommand({
+        TableName: SCANNER_TABLE,
+        Item: marshall({
+          PK: `SCAN#${scanId}`,
+          SK: 'METADATA',
+          EntityType: 'ScanResult',
+          GSI1PK: `USER#${userId}`,
+          GSI1SK: uploadedAt,
+          GSI2PK: 'STATUS#PENDING_REVIEW',
+          GSI2SK: uploadedAt,
+          scanId,
+          userId,
+          objectKey,
+          bucketName,
+          status,
+          approvalStatus: 'PENDING_REVIEW',
+          uploadedAt,
+          completedAt,
+          fileSize: objectSize,
+          overallAssessment,
+          hasToxicContent: toxicityResults.hasToxicContent,
+          hasPII: piiResults.hasPII,
+          sentiment: sentimentResults.sentiment,
+          aiSummary: aiSummary.summary,
+          reportS3Key: jsonReportKey,
+          htmlReportS3Key: htmlReportKey
+        }, { removeUndefinedValues: true })
+      })),
+      undefined,
+      logger
+    );
+    
+    logger.info('Scan metadata saved to DynamoDB', { scanId, userId });
+  } catch (error) {
+    logger.error('Failed to save scan metadata to DynamoDB', {
+      error: error instanceof Error ? error.message : String(error),
+      errorName: error instanceof Error ? error.name : 'Unknown',
       scanId,
-      userId,
-      objectKey,
-      bucketName,
-      status,
-      approvalStatus: 'PENDING_REVIEW',
-      uploadedAt,
-      completedAt,
-      fileSize: objectSize,
-      overallAssessment,
-      hasToxicContent: toxicityResults.hasToxicContent,
-      hasPII: piiResults.hasPII,
-      sentiment: sentimentResults.sentiment,
-      aiSummary: aiSummary.summary,
-      reportS3Key: jsonReportKey,
-      htmlReportS3Key: htmlReportKey
-    }, { removeUndefinedValues: true })
-  }));
-  
-  logger.info('Scan metadata saved to DynamoDB', { scanId, userId });
+      userId
+    });
+    
+    throw new StorageError(
+      'Failed to save scan metadata',
+      'write',
+      `dynamodb://${SCANNER_TABLE}/SCAN#${scanId}`,
+      error instanceof Error ? error : undefined
+    );
+  }
 }
 
 export async function waitForApproval(
