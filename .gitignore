@@ -46,3 +46,4 @@ samconfig.toml
 *.mp4
 *.mp3
 test_*
+test.http

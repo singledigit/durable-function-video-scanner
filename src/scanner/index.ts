@@ -10,6 +10,7 @@ import { detectPII } from './analysis/pii';
 import { generateAISummary } from './reporting/ai-summary';
 import { saveReportsToS3 } from './storage/s3';
 import { saveScanMetadata, waitForApproval, updateApprovalStatus } from './storage/dynamodb';
+import { publishEvent } from './events/appsync';
 
 /**
  * Scanner Durable Function
@@ -34,6 +35,17 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
   const userId = keyParts.length >= 2 ? keyParts[1] : 'unknown';
 
   try {
+    // Publish SCAN_STARTED event
+    await context.step('publish-scan-started', async () => {
+      await publishEvent({
+        type: 'SCAN_STARTED',
+        scanId,
+        userId,
+        timestamp: uploadedAt,
+        data: { objectKey, objectSize },
+      });
+    });
+
     // ========================================================================
     // STEP 1-4: Run Transcribe and Rekognition in parallel
     // ========================================================================
@@ -69,6 +81,35 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       rekognitionFailed: !!rekognitionError
     });
 
+    // Publish TRANSCRIPTION_COMPLETED event
+    await context.step('publish-transcription-completed', async () => {
+      await publishEvent({
+        type: 'TRANSCRIPTION_COMPLETED',
+        scanId,
+        userId,
+        timestamp: new Date().toISOString(),
+        data: {
+          transcriptLength: transcriptData.fullText.length,
+          wordCount: transcriptData.fullText.split(/\s+/).length,
+        },
+      });
+    });
+
+    // Publish REKOGNITION_COMPLETED event
+    await context.step('publish-rekognition-completed', async () => {
+      await publishEvent({
+        type: 'REKOGNITION_COMPLETED',
+        scanId,
+        userId,
+        timestamp: new Date().toISOString(),
+        data: {
+          success: !!videoTextData,
+          error: rekognitionError || null,
+          textDetected: videoTextData?.detectionCount || 0,
+        },
+      });
+    });
+
     const warnings: string[] = [];
     if (rekognitionError) {
       warnings.push(`Video text detection failed: ${rekognitionError}`);
@@ -101,6 +142,21 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       toxicity: toxicityResults,
       sentiment: sentimentResults,
       pii: piiResults
+    });
+
+    // Publish ANALYSIS_COMPLETED event
+    await context.step('publish-analysis-completed', async () => {
+      await publishEvent({
+        type: 'ANALYSIS_COMPLETED',
+        scanId,
+        userId,
+        timestamp: new Date().toISOString(),
+        data: {
+          toxicity: toxicityResults.hasToxicContent,
+          sentiment: sentimentResults.sentiment,
+          piiDetected: piiResults.hasPII,
+        },
+      });
     });
 
     // ========================================================================
@@ -211,6 +267,34 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       };
     });
 
+    // Publish REPORT_GENERATED event
+    await context.step('publish-report-generated', async () => {
+      await publishEvent({
+        type: 'REPORT_GENERATED',
+        scanId,
+        userId,
+        timestamp: new Date().toISOString(),
+        data: {
+          overallAssessment: scanRecord.overallAssessment,
+          jsonReportKey: scanRecord.jsonReportKey,
+          htmlReportKey: scanRecord.htmlReportKey,
+        },
+      });
+    });
+
+    // Publish PENDING_REVIEW event
+    await context.step('publish-pending-review', async () => {
+      await publishEvent({
+        type: 'PENDING_REVIEW',
+        scanId,
+        userId,
+        timestamp: new Date().toISOString(),
+        data: {
+          overallAssessment: scanRecord.overallAssessment,
+        },
+      });
+    });
+
     // ========================================================================
     // STEP 10: Wait for human approval with 3-day timeout
     // ========================================================================
@@ -244,6 +328,21 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
         scanRecord.htmlReportKey,
         approvalResult
       );
+    });
+
+    // Publish final approval event
+    await context.step('publish-approval-status', async () => {
+      await publishEvent({
+        type: approvalResult.approved ? 'APPROVED' : 'REJECTED',
+        scanId,
+        userId,
+        timestamp: new Date().toISOString(),
+        data: {
+          approved: approvalResult.approved,
+          reviewedBy: approvalResult.reviewedBy,
+          comments: approvalResult.comments,
+        },
+      });
     });
 
     logger.info('Scanner completed successfully with approval', { 

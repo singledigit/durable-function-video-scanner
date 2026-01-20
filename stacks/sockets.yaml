@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: WebSocket Stack - AppSync Events API
+
+Parameters:
+  AuthStackName:
+    Type: String
+    Description: Name of the auth stack to import Cognito resources
+    Default: video-scanner-auth
+
+Parameters:
+  AuthStackName:
+    Type: String
+    Description: Name of the parent auth stack
+    Default: video-scanner-auth
+  UserPoolId:
+    Type: String
+    Description: Cognito User Pool ID from parent stack
+
+Resources:
+  AppSyncEventsApi:
+    Type: AWS::AppSync::Api
+    Properties:
+      Name: video-scanner-events
+      EventConfig:
+        AuthProviders:
+          - AuthType: AMAZON_COGNITO_USER_POOLS
+            CognitoConfig:
+              UserPoolId: !Ref UserPoolId
+              AwsRegion: !Ref AWS::Region
+          - AuthType: AWS_IAM
+        ConnectionAuthModes:
+          - AuthType: AMAZON_COGNITO_USER_POOLS
+        DefaultPublishAuthModes:
+          - AuthType: AWS_IAM
+        DefaultSubscribeAuthModes:
+          - AuthType: AMAZON_COGNITO_USER_POOLS
+
+  AppSyncChannelNamespace:
+    Type: AWS::AppSync::ChannelNamespace
+    Properties:
+      ApiId: !GetAtt AppSyncEventsApi.ApiId
+      Name: default
+      PublishAuthModes:
+        - AuthType: AWS_IAM
+      SubscribeAuthModes:
+        - AuthType: AMAZON_COGNITO_USER_POOLS
+
+Outputs:
+  AppSyncApiId:
+    Description: AppSync Events API ID
+    Value: !GetAtt AppSyncEventsApi.ApiId
+
+  AppSyncHttpEndpoint:
+    Description: AppSync Events HTTP Endpoint
+    Value: !GetAtt AppSyncEventsApi.Dns.Http
+
+  AppSyncRealtimeEndpoint:
+    Description: AppSync Events Realtime Endpoint
+    Value: !GetAtt AppSyncEventsApi.Dns.Realtime

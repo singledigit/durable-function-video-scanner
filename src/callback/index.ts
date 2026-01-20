@@ -27,11 +27,17 @@ interface SNSEvent {
   }>;
 }
 
+interface ApiGatewayEvent {
+  body: string;
+  httpMethod: string;
+  headers: Record<string, string>;
+}
+
 interface DirectInvokeEvent {
   [key: string]: any;
 }
 
-export const handler = async (event: EventBridgeEvent | SNSEvent | DirectInvokeEvent) => {
+export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEvent | DirectInvokeEvent) => {
   logger.info('Callback handler invoked', { event });
 
   try {
@@ -41,8 +47,56 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | DirectInvokeE
     let isFailure = false;
     let errorInfo: { type?: string; message?: string; data?: string } = {};
 
+    // API Gateway events (Approval from frontend)
+    if ('httpMethod' in event && event.httpMethod === 'POST') {
+      try {
+        const body = JSON.parse(event.body);
+        const scanId = body.scanId;
+        
+        if (!scanId) {
+          return {
+            statusCode: 400,
+            headers: {
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*'
+            },
+            body: JSON.stringify({ 
+              error: 'Missing required field: scanId' 
+            })
+          };
+        }
+        
+        jobName = `approval-${scanId}`;
+        
+        result = {
+          approved: body.approved,
+          reviewedBy: body.reviewedBy || 'api-user',
+          reviewedAt: new Date().toISOString(),
+          comments: body.comments || ''
+        };
+        
+        logger.info('API Gateway approval event detected', { 
+          scanId, 
+          approved: body.approved 
+        });
+      } catch (parseError) {
+        logger.error('Failed to parse API Gateway request body', { 
+          error: parseError instanceof Error ? parseError.message : String(parseError) 
+        });
+        return {
+          statusCode: 400,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          },
+          body: JSON.stringify({ 
+            error: 'Invalid JSON in request body' 
+          })
+        };
+      }
+    }
     // EventBridge events (Transcribe)
-    if ('detail-type' in event && event.detail) {
+    else if ('detail-type' in event && event.detail) {
       const detail = event.detail;
       
       if (detail.TranscriptionJobName) {
@@ -230,12 +284,48 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | DirectInvokeE
     
     logger.info('Callback token cleaned up from DynamoDB', { jobName });
 
-    return { success: true };
+    // Return appropriate response based on event source
+    if ('httpMethod' in event) {
+      // API Gateway response
+      return {
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({ 
+          success: true,
+          message: 'Approval processed successfully',
+          scanId: jobName.replace('approval-', '')
+        })
+      };
+    } else {
+      // EventBridge/SNS/Direct invoke response
+      return { success: true };
+    }
   } catch (error) {
     logger.error('Failed to process callback', {
       error: error instanceof Error ? error.message : String(error),
       errorName: error instanceof Error ? error.name : 'Unknown'
     });
-    throw error;
+    
+    // Return appropriate error response based on event source
+    if ('httpMethod' in event) {
+      // API Gateway error response
+      return {
+        statusCode: 500,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({ 
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      };
+    } else {
+      // EventBridge/SNS/Direct invoke - throw error
+      throw error;
+    }
   }
 };

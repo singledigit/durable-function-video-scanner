@@ -8,4 +8,4 @@ inclusion: always
     * Logging
     * Patterns
 * Durable functions reference https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html
-* Whyen I ask a question, answer and make recommendations but wait for my approval to execute
+* When I ask a question, answer and make recommendations but wait for my approval to execute

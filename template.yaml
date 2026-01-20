@@ -10,8 +10,38 @@ Globals:
     Timeout: 900
     MemorySize: 512
     Tracing: Active
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: "'*'"
+      MaxAge: "'600'"
 
 Resources:
+  # Nested stacks
+  AuthStack:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: stacks/auth.yaml
+
+  SocketsStack:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: stacks/sockets.yaml
+      Parameters:
+        UserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
+
+  # API Gateway for frontend integration
+  ScannerApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt AuthStack.Outputs.UserPoolArn
+
   # Single DynamoDB table for all scanner data
   ScannerTable:
     Type: AWS::DynamoDB::Table
@@ -112,7 +142,6 @@ Resources:
   ScannerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: scanner-function
       CodeUri: src/scanner/
       Handler: index.handler
       Description: Scanner durable function triggered by S3 events
@@ -128,6 +157,7 @@ Resources:
           REKOGNITION_ROLE_ARN: !GetAtt RekognitionServiceRole.Arn
           REKOGNITION_SNS_TOPIC_ARN: !Ref RekognitionNotificationTopic
           BEDROCK_MODEL_ID: global.amazon.nova-2-lite-v1:0
+          APPSYNC_EVENTS_API_URL: !Sub 'https://${SocketsStack.Outputs.AppSyncHttpEndpoint}/event'
       DurableConfig:
         ExecutionTimeout: 604800
         RetentionPeriodInDays: 30
@@ -164,6 +194,10 @@ Resources:
               Action:
                 - bedrock:InvokeModel
               Resource: '*'
+            - Effect: Allow
+              Action:
+                - appsync:EventPublish
+              Resource: !Sub 'arn:aws:appsync:${AWS::Region}:${AWS::AccountId}:apis/${SocketsStack.Outputs.AppSyncApiId}/*'
       Events:
         S3ObjectCreated:
           Type: EventBridgeRule
@@ -193,7 +227,6 @@ Resources:
   CallbackFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: callback-function
       CodeUri: src/callback/
       Handler: index.handler
       Description: Unified callback handler for Transcribe, Rekognition, and Approval events
@@ -214,6 +247,13 @@ Resources:
                 - !GetAtt ScannerFunction.Arn
                 - !Sub '${ScannerFunction.Arn}:*'
       Events:
+        # API Gateway endpoint for approval/rejection submissions
+        ApprovalApi:
+          Type: Api
+          Properties:
+            Path: /approval
+            Method: POST
+            RestApiId: !Ref ScannerApi
         TranscribeComplete:
           Type: EventBridgeRule
           Properties:
@@ -239,7 +279,170 @@ Resources:
         EntryPoints:
           - index.ts
 
+  # API Functions
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/api-upload/
+      Handler: index.handler
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref ScannerBucket
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref ScannerBucket
+      Events:
+        Upload:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /upload
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
+  ListScansFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/api-list-scans/
+      Handler: index.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ScannerTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ScannerTable
+      Events:
+        ListScans:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /scans
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
+  GetScanFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/api-get-scan/
+      Handler: index.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ScannerTable
+          BUCKET_NAME: !Ref ScannerBucket
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ScannerTable
+        - S3ReadPolicy:
+            BucketName: !Ref ScannerBucket
+      Events:
+        GetScan:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /scans/{scanId}
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
+  ListPendingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/api-list-pending/
+      Handler: index.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ScannerTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ScannerTable
+      Events:
+        ListPending:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /admin/pending
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
+  ApproveFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/api-approve/
+      Handler: index.handler
+      Environment:
+        Variables:
+          CALLBACK_FUNCTION_NAME: !Ref CallbackFunction
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CallbackFunction
+      Events:
+        Approve:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /admin/approve
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
 Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ScannerApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
+  
+  ApprovalEndpoint:
+    Description: Full URL for approval/rejection endpoint
+    Value: !Sub 'https://${ScannerApi}.execute-api.${AWS::Region}.amazonaws.com/prod/approval'
+  
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !GetAtt AuthStack.Outputs.UserPoolId
+  
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !GetAtt AuthStack.Outputs.UserPoolClientId
+  
+  AppSyncHttpEndpoint:
+    Description: AppSync Events HTTP Endpoint
+    Value: !GetAtt SocketsStack.Outputs.AppSyncHttpEndpoint
+  
+  AppSyncRealtimeEndpoint:
+    Description: AppSync Events Realtime Endpoint
+    Value: !GetAtt SocketsStack.Outputs.AppSyncRealtimeEndpoint
+  
   ScannerBucketName:
     Description: S3 Bucket for uploads
     Value: !Ref ScannerBucket

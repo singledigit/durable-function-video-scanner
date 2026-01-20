@@ -17,6 +17,11 @@
     "@aws-sdk/client-s3": "^3.0.0",
     "@aws-sdk/client-transcribe": "^3.0.0",
     "@aws-sdk/util-dynamodb": "^3.0.0",
+    "@aws-sdk/signature-v4": "^3.0.0",
+    "@smithy/protocol-http": "^4.0.0",
+    "@smithy/signature-v4": "^4.0.0",
+    "@aws-sdk/credential-provider-node": "^3.0.0",
+    "@aws-crypto/sha256-js": "^5.0.0",
     "uuid": "^11.0.0"
   },
   "devDependencies": {
