@@ -9,13 +9,26 @@ const docClient = DynamoDBDocumentClient.from(dynamoClient);
 const TABLE_NAME = process.env.TABLE_NAME!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+    'Access-Control-Allow-Methods': 'GET,OPTIONS',
+  };
+
   try {
     const groups = event.requestContext.authorizer?.claims?.['cognito:groups'];
     const isAdmin = groups?.includes('Admins');
+    
+    logger.info('List pending request', { 
+      groups, 
+      isAdmin,
+      claims: event.requestContext.authorizer?.claims 
+    });
 
     if (!isAdmin) {
       return {
         statusCode: 403,
+        headers,
         body: JSON.stringify({ error: 'Admin access required' }),
       };
     }
@@ -36,12 +49,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     return {
       statusCode: 200,
+      headers,
       body: JSON.stringify({ scans: result.Items || [] }),
     };
   } catch (error) {
     logger.error('Error listing pending reviews', { error });
     return {
       statusCode: 500,
+      headers,
       body: JSON.stringify({ error: 'Internal server error' }),
     };
   }

@@ -12,13 +12,22 @@ const TABLE_NAME = process.env.TABLE_NAME!;
 const BUCKET_NAME = process.env.BUCKET_NAME!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+    'Access-Control-Allow-Methods': 'GET,OPTIONS',
+  };
+
   try {
     const userId = event.requestContext.authorizer?.claims?.sub;
+    const groups = event.requestContext.authorizer?.claims?.['cognito:groups'];
+    const isAdmin = groups?.includes('Admins');
     const scanId = event.pathParameters?.scanId;
 
     if (!userId || !scanId) {
       return {
         statusCode: 400,
+        headers,
         body: JSON.stringify({ error: 'Missing required parameters' }),
       };
     }
@@ -36,14 +45,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!result.Item) {
       return {
         statusCode: 404,
+        headers,
         body: JSON.stringify({ error: 'Scan not found' }),
       };
     }
 
-    // Verify user owns this scan
-    if (result.Item.userId !== userId) {
+    // Verify user owns this scan or is admin
+    if (result.Item.userId !== userId && !isAdmin) {
       return {
         statusCode: 403,
+        headers,
         body: JSON.stringify({ error: 'Forbidden' }),
       };
     }
@@ -69,6 +80,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     return {
       statusCode: 200,
+      headers,
       body: JSON.stringify({
         scan: result.Item,
         fullReport,
@@ -78,6 +90,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     logger.error('Error retrieving scan', { error });
     return {
       statusCode: 500,
+      headers,
       body: JSON.stringify({ error: 'Internal server error' }),
     };
   }

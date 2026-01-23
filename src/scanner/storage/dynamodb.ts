@@ -17,8 +17,7 @@ export async function saveScanMetadata(
   piiResults: any,
   sentimentResults: any,
   aiSummary: any,
-  jsonReportKey: string,
-  htmlReportKey: string
+  jsonReportKey: string
 ): Promise<void> {
   logger.info('Saving scan metadata to DynamoDB', { scanId, userId });
   
@@ -50,8 +49,7 @@ export async function saveScanMetadata(
           hasPII: piiResults.hasPII,
           sentiment: sentimentResults.sentiment,
           aiSummary: aiSummary.summary,
-          reportS3Key: jsonReportKey,
-          htmlReportS3Key: htmlReportKey
+          reportS3Key: jsonReportKey
         }, { removeUndefinedValues: true })
       })),
       undefined,
@@ -128,7 +126,12 @@ export async function waitForApproval(
       }
     );
     
-    return approvalResult;
+    // Parse if result is a string (durable SDK returns stringified result)
+    const parsedResult = typeof approvalResult === 'string' 
+      ? JSON.parse(approvalResult) 
+      : approvalResult;
+    
+    return parsedResult;
   } catch (error) {
     // Handle timeout - auto-reject after 3 days
     logger.warn('Approval timeout - auto-rejecting', {
@@ -159,7 +162,6 @@ export async function updateApprovalStatus(
   sentimentResults: any,
   aiSummary: any,
   jsonReportKey: string,
-  htmlReportKey: string,
   approvalResult: {
     approved: boolean;
     reviewedBy: string;
@@ -208,8 +210,7 @@ export async function updateApprovalStatus(
       hasPII: piiResults.hasPII,
       sentiment: sentimentResults.sentiment,
       aiSummary: aiSummary.summary,
-      reportS3Key: jsonReportKey,
-      htmlReportS3Key: htmlReportKey
+      reportS3Key: jsonReportKey
     }, { removeUndefinedValues: true })
   }));
   

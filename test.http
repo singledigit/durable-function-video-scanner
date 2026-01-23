@@ -1,0 +1,53 @@
+### Variables
+@apiEndpoint = https://x5hi1qdpi0.execute-api.us-west-2.amazonaws.com/prod
+@scanId = 8a6f7f96-9454-44f4-b13b-787c5b50b17a
+
+### Approve Scan
+POST {{apiEndpoint}}/approval
+Content-Type: application/json
+
+{
+  "scanId": "{{scanId}}",
+  "approved": true,
+  "reviewedBy": "admin",
+  "comments": "Content looks good, approved for publication"
+}
+
+### Reject Scan
+POST {{apiEndpoint}}/approval
+Content-Type: application/json
+
+{
+  "scanId": "{{scanId}}",
+  "approved": false,
+  "reviewedBy": "admin",
+  "comments": "Contains policy violations, rejected"
+}
+
+### Approve with minimal data
+POST {{apiEndpoint}}/approval
+Content-Type: application/json
+
+{
+  "scanId": "{{scanId}}",
+  "approved": true,
+  "reviewedBy": "api-user"
+}
+
+### Test with invalid scanId (should return 400)
+POST {{apiEndpoint}}/approval
+Content-Type: application/json
+
+{
+  "approved": true,
+  "reviewedBy": "admin"
+}
+
+### Test with invalid JSON (should return 400)
+POST {{apiEndpoint}}/approval
+Content-Type: application/json
+
+{
+  "scanId": "{{scanId}}",
+  "approved": "not-a-boolean"
+}

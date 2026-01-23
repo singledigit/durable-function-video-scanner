@@ -40,6 +40,21 @@ interface DirectInvokeEvent {
 export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEvent | DirectInvokeEvent) => {
   logger.info('Callback handler invoked', { event });
 
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+    'Access-Control-Allow-Methods': 'POST,OPTIONS',
+  };
+
+  // Handle OPTIONS preflight request
+  if ('httpMethod' in event && event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers: corsHeaders,
+      body: '',
+    };
+  }
+
   try {
     // Detect event source and extract job identifier
     let jobName: string;
@@ -56,10 +71,7 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
         if (!scanId) {
           return {
             statusCode: 400,
-            headers: {
-              'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*'
-            },
+            headers: corsHeaders,
             body: JSON.stringify({ 
               error: 'Missing required field: scanId' 
             })
@@ -85,10 +97,7 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
         });
         return {
           statusCode: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          },
+          headers: corsHeaders,
           body: JSON.stringify({ 
             error: 'Invalid JSON in request body' 
           })
@@ -289,10 +298,7 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
       // API Gateway response
       return {
         statusCode: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
+        headers: corsHeaders,
         body: JSON.stringify({ 
           success: true,
           message: 'Approval processed successfully',
@@ -314,10 +320,7 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
       // API Gateway error response
       return {
         statusCode: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
+        headers: corsHeaders,
         body: JSON.stringify({ 
           success: false,
           error: error instanceof Error ? error.message : String(error)

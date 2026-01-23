@@ -2,17 +2,23 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { Logger } from '@aws-lambda-powertools/logger';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { CORS_HEADERS } from './cors';
 
 const logger = new Logger({ serviceName: 'upload-handler' });
 const s3 = new S3Client({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers: CORS_HEADERS, body: '' };
+  }
+
   try {
     const userId = event.requestContext.authorizer?.claims?.sub;
     if (!userId) {
       return {
         statusCode: 401,
+        headers: CORS_HEADERS,
         body: JSON.stringify({ error: 'Unauthorized' }),
       };
     }
@@ -23,6 +29,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (!filename) {
       return {
         statusCode: 400,
+        headers: CORS_HEADERS,
         body: JSON.stringify({ error: 'filename is required' }),
       };
     }
@@ -41,12 +48,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     return {
       statusCode: 200,
+      headers: CORS_HEADERS,
       body: JSON.stringify({ url, key }),
     };
   } catch (error) {
     logger.error('Error generating presigned URL', { error });
     return {
       statusCode: 500,
+      headers: CORS_HEADERS,
       body: JSON.stringify({ error: 'Internal server error' }),
     };
   }

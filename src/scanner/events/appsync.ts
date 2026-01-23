@@ -23,42 +23,66 @@ export async function publishEvent(event: EventData): Promise<void> {
     return;
   }
 
-  const url = new URL(APPSYNC_EVENTS_API_URL);
-  const body = JSON.stringify(event);
+  try {
+    const url = new URL(APPSYNC_EVENTS_API_URL);
+    
+    // Publish to both user-specific channel and admin channel
+    const channels = [
+      `default/scan-updates-${event.userId}`,
+    ];
+    
+    // Add admin channel for PENDING_REVIEW events
+    if (event.type === 'PENDING_REVIEW') {
+      channels.push('default/admin-pending-reviews');
+    }
+    
+    // Publish to each channel separately
+    for (const channel of channels) {
+      const body = JSON.stringify({
+        channel,
+        events: [JSON.stringify(event)],
+      });
+      
+      console.log('Publishing to channel:', channel);
 
-  const request = new HttpRequest({
-    hostname: url.hostname,
-    path: url.pathname,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'host': url.hostname,
-    },
-    body,
-  });
+      const request = new HttpRequest({
+        hostname: url.hostname,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'host': url.hostname,
+        },
+        body,
+      });
 
-  const signer = new SignatureV4({
-    service: 'appsync',
-    region: AWS_REGION,
-    credentials: defaultProvider(),
-    sha256: Sha256,
-  });
+      const signer = new SignatureV4({
+        service: 'appsync',
+        region: AWS_REGION,
+        credentials: defaultProvider(),
+        sha256: Sha256,
+      });
 
-  const signedRequest = await signer.sign(request);
+      const signedRequest = await signer.sign(request);
 
-  const response = await fetch(`https://${signedRequest.hostname}${signedRequest.path}`, {
-    method: signedRequest.method,
-    headers: signedRequest.headers as Record<string, string>,
-    body: signedRequest.body,
-  });
+      const response = await fetch(`https://${signedRequest.hostname}${signedRequest.path}`, {
+        method: signedRequest.method,
+        headers: signedRequest.headers as Record<string, string>,
+        body: signedRequest.body,
+      });
 
-  if (!response.ok) {
-    const error = await response.text();
-    console.error('Failed to publish event:', error);
-    throw new Error(`AppSync Events publish failed: ${response.status}`);
+      if (!response.ok) {
+        const error = await response.text();
+        console.error(`Failed to publish to ${channel}:`, error);
+        throw new Error(`AppSync Events publish failed: ${response.status}`);
+      }
+
+      console.log(`Published ${event.type} to ${channel}`);
+    }
+  } catch (error) {
+    console.error('Error publishing event:', error);
+    // Don't throw - allow workflow to continue even if event publishing fails
   }
-
-  console.log(`Published event: ${event.type} for scan ${event.scanId}`);
 }
 
 /**

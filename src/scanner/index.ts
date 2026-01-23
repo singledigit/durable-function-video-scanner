@@ -26,13 +26,15 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
   const objectKey = event.detail.object.key;
   const objectSize = event.detail.object.size;
 
-  // Generate scanId at the start so it can be used throughout
-  const scanId = uuidv4();
-  const uploadedAt = new Date().toISOString();
-  
   // Extract userId from objectKey (format: raw/{userId}/{filename})
   const keyParts = objectKey.split('/');
   const userId = keyParts.length >= 2 ? keyParts[1] : 'unknown';
+
+  // Generate scanId in a step for deterministic replay
+  const { scanId, uploadedAt } = await context.step('generate-scan-id', async () => ({
+    scanId: uuidv4(),
+    uploadedAt: new Date().toISOString(),
+  }));
 
   try {
     // Publish SCAN_STARTED event
@@ -233,7 +235,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       };
       
       // Save reports to S3
-      const { jsonReportKey, htmlReportKey } = await saveReportsToS3(
+      const { jsonReportKey } = await saveReportsToS3(
         bucketName,
         scanId,
         completeResult
@@ -253,8 +255,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
         piiResults,
         sentimentResults,
         aiSummary,
-        jsonReportKey,
-        htmlReportKey
+        jsonReportKey
       );
       
       return {
@@ -262,7 +263,6 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
         userId,
         uploadedAt,
         jsonReportKey,
-        htmlReportKey,
         overallAssessment
       };
     });
@@ -277,7 +277,6 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
         data: {
           overallAssessment: scanRecord.overallAssessment,
           jsonReportKey: scanRecord.jsonReportKey,
-          htmlReportKey: scanRecord.htmlReportKey,
         },
       });
     });
@@ -306,6 +305,11 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       bucketName,
       objectKey
     );
+    
+    logger.info('Approval result received', { 
+      scanId: scanRecord.scanId,
+      approvalResult 
+    });
 
     // ========================================================================
     // STEP 11: Update final approval status
@@ -325,7 +329,6 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
         sentimentResults,
         aiSummary,
         scanRecord.jsonReportKey,
-        scanRecord.htmlReportKey,
         approvalResult
       );
     });
@@ -365,7 +368,6 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       reviewedAt: finalStatus.reviewedAt,
       reviewComments: finalStatus.comments,
       reportS3Key: scanRecord.jsonReportKey,
-      htmlReportS3Key: scanRecord.htmlReportKey,
       aiSummary: aiSummary.summary,
       warnings
     };
