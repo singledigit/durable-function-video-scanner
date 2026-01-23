@@ -408,33 +408,6 @@ Resources:
         EntryPoints:
           - index.ts
 
-  ApproveFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/api-approve/
-      Handler: index.handler
-      Environment:
-        Variables:
-          CALLBACK_FUNCTION_NAME: !Ref CallbackFunction
-      Policies:
-        - LambdaInvokePolicy:
-            FunctionName: !Ref CallbackFunction
-      Events:
-        Approve:
-          Type: Api
-          Properties:
-            RestApiId: !Ref ScannerApi
-            Path: /admin/approve
-            Method: POST
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2022
-        Sourcemap: true
-        EntryPoints:
-          - index.ts
-
 Outputs:
   ApiEndpoint:
     Description: API Gateway endpoint URL
