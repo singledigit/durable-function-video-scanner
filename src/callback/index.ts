@@ -240,9 +240,9 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
     if (isFailure) {
       const command = new SendDurableExecutionCallbackFailureCommand({
         CallbackId: callbackToken,
-        ErrorType: errorInfo.type,
-        ErrorMessage: errorInfo.message,
-        ErrorData: errorInfo.data
+        Error: {
+          Message: errorInfo.message
+        } as any
       });
       
       await lambda.send(command);

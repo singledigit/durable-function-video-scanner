@@ -18,21 +18,74 @@
     <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
       <div class="px-4 py-6 sm:px-0">
         <div class="mb-6">
-          <h2 class="text-2xl font-bold mb-4">Upload Video</h2>
-          <input
-            type="file"
-            accept="video/*"
-            @change="handleFileSelect"
-            class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-          />
-          <button
-            v-if="selectedFile"
-            @click="uploadFile"
-            :disabled="uploading"
-            class="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          <h2 class="text-2xl font-bold mb-4">Upload Videos</h2>
+          
+          <!-- Drag and Drop Zone -->
+          <div
+            @drop.prevent="handleDrop"
+            @dragover.prevent="isDragging = true"
+            @dragleave.prevent="isDragging = false"
+            :class="{
+              'border-blue-500 bg-blue-50': isDragging,
+              'border-gray-300': !isDragging
+            }"
+            class="border-2 border-dashed rounded-lg p-8 text-center transition-colors"
           >
-            {{ uploading ? 'Uploading...' : 'Upload' }}
-          </button>
+            <div class="space-y-2">
+              <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <div class="text-gray-600">
+                <label class="cursor-pointer text-blue-600 hover:text-blue-700">
+                  <span>Click to select</span>
+                  <input
+                    type="file"
+                    accept="video/*"
+                    multiple
+                    @change="handleFileSelect"
+                    class="hidden"
+                  />
+                </label>
+                <span> or drag and drop videos here</span>
+              </div>
+              <p class="text-xs text-gray-500">MP4, MOV, AVI up to 100MB each</p>
+            </div>
+          </div>
+
+          <!-- Selected Files List -->
+          <div v-if="selectedFiles.length > 0" class="mt-4">
+            <div class="flex justify-between items-center mb-2">
+              <h3 class="font-semibold">Selected Files ({{ selectedFiles.length }})</h3>
+              <button
+                @click="selectedFiles = []"
+                class="text-sm text-red-600 hover:text-red-700"
+              >
+                Clear All
+              </button>
+            </div>
+            <div class="space-y-2 max-h-40 overflow-y-auto">
+              <div
+                v-for="(file, index) in selectedFiles"
+                :key="index"
+                class="flex items-center justify-between bg-gray-50 p-2 rounded"
+              >
+                <span class="text-sm truncate flex-1">{{ file.name }}</span>
+                <button
+                  @click="removeFile(index)"
+                  class="ml-2 text-red-600 hover:text-red-700"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <button
+              @click="uploadFiles"
+              :disabled="uploading"
+              class="mt-4 w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+            >
+              {{ uploading ? 'Uploading...' : `Upload ${selectedFiles.length} Video${selectedFiles.length > 1 ? 's' : ''}` }}
+            </button>
+          </div>
         </div>
 
         <div>
@@ -93,8 +146,9 @@ const router = useRouter();
 
 const scans = ref<any[]>([]);
 const loading = ref(true);
-const selectedFile = ref<File | null>(null);
+const selectedFiles = ref<File[]>([]);
 const uploading = ref(false);
+const isDragging = ref(false);
 
 const loadScans = async () => {
   loading.value = true;
@@ -110,34 +164,55 @@ const loadScans = async () => {
 
 const handleFileSelect = (event: Event) => {
   const target = event.target as HTMLInputElement;
-  selectedFile.value = target.files?.[0] || null;
+  if (target.files) {
+    selectedFiles.value = Array.from(target.files);
+  }
 };
 
-const uploadFile = async () => {
-  if (!selectedFile.value) return;
+const handleDrop = (event: DragEvent) => {
+  isDragging.value = false;
+  if (event.dataTransfer?.files) {
+    const videoFiles = Array.from(event.dataTransfer.files).filter(file => 
+      file.type.startsWith('video/')
+    );
+    selectedFiles.value = videoFiles;
+  }
+};
+
+const removeFile = (index: number) => {
+  selectedFiles.value = selectedFiles.value.filter((_, i) => i !== index);
+};
+
+const uploadFiles = async () => {
+  if (selectedFiles.value.length === 0) return;
 
   uploading.value = true;
   try {
-    const { url, key } = await uploadVideo(selectedFile.value.name, selectedFile.value.type);
-    
-    await fetch(url, {
-      method: 'PUT',
-      body: selectedFile.value,
-      headers: { 'Content-Type': selectedFile.value.type },
-    });
+    // Upload all files in parallel
+    await Promise.all(
+      selectedFiles.value.map(async (file) => {
+        const { url, key } = await uploadVideo(file.name, file.type);
+        
+        await fetch(url, {
+          method: 'PUT',
+          body: file,
+          headers: { 'Content-Type': file.type },
+        });
 
-    selectedFile.value = null;
-    
-    // Add optimistic scan entry
-    const optimisticScan = {
-      scanId: 'uploading-' + Date.now(),
-      objectKey: key,
-      uploadedAt: new Date().toISOString(),
-      overallAssessment: 'PROCESSING',
-      approvalStatus: 'PROCESSING',
-      isOptimistic: true
-    };
-    scans.value = [optimisticScan, ...scans.value];
+        // Add optimistic scan entry
+        const optimisticScan = {
+          scanId: 'uploading-' + Date.now() + '-' + Math.random(),
+          objectKey: key,
+          uploadedAt: new Date().toISOString(),
+          overallAssessment: 'PROCESSING',
+          approvalStatus: 'PROCESSING',
+          isOptimistic: true
+        };
+        scans.value = [optimisticScan, ...scans.value];
+      })
+    );
+
+    selectedFiles.value = [];
   } catch (error) {
     console.error('Upload failed:', error);
   } finally {

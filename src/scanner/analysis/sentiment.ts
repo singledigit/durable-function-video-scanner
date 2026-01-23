@@ -39,7 +39,12 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
     
     return {
       sentiment: response.Sentiment!,
-      sentimentScore: response.SentimentScore,
+      sentimentScore: response.SentimentScore ? {
+        Positive: response.SentimentScore.Positive ?? 0,
+        Negative: response.SentimentScore.Negative ?? 0,
+        Neutral: response.SentimentScore.Neutral ?? 0,
+        Mixed: response.SentimentScore.Mixed ?? 0
+      } : undefined,
       truncated: textBytes > MAX_BYTES,
       analyzedBytes: Buffer.byteLength(textToAnalyze, 'utf8')
     };
