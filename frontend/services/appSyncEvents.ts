@@ -25,7 +25,8 @@ interface Subscription {
 
 class AppSyncEventsService {
   private ws: WebSocket | null = null;
-  private url: string = '';
+  private httpEndpoint: string = '';
+  private realtimeEndpoint: string = '';
   private connectionState: ConnectionState = ConnectionState.DISCONNECTED;
   private subscriptions: Map<string, Subscription[]> = new Map();
   private subscriptionIdToChannel: Map<string, string> = new Map();
@@ -36,8 +37,9 @@ class AppSyncEventsService {
   private shouldReconnect: boolean = true;
   private authToken: string = '';
 
-  configure(url: string, authToken: string) {
-    this.url = url;
+  configure(httpEndpoint: string, realtimeEndpoint: string, authToken: string) {
+    this.httpEndpoint = httpEndpoint;
+    this.realtimeEndpoint = realtimeEndpoint;
     this.authToken = authToken;
   }
 
@@ -64,7 +66,7 @@ class AppSyncEventsService {
       return;
     }
 
-    if (!this.url || !this.authToken) {
+    if (!this.httpEndpoint || !this.realtimeEndpoint || !this.authToken) {
       throw new Error('AppSync Events not configured');
     }
 
@@ -72,10 +74,12 @@ class AppSyncEventsService {
     this.shouldReconnect = true;
 
     try {
-      const wsUrl = this.buildWebSocketUrl();
       const authSubprotocol = this.getAuthSubprotocol();
       
-      this.ws = new WebSocket(wsUrl, [authSubprotocol, 'aws-appsync-event-ws']);
+      console.log('[AppSync Events] Connecting to:', this.realtimeEndpoint);
+      console.log('[AppSync Events] Using HTTP host for auth:', new URL(this.httpEndpoint).host);
+      
+      this.ws = new WebSocket(this.realtimeEndpoint, [authSubprotocol, 'aws-appsync-event-ws']);
       this.ws.onopen = this.handleOpen.bind(this);
       this.ws.onmessage = this.handleMessage.bind(this);
       this.ws.onerror = this.handleError.bind(this);
@@ -88,13 +92,6 @@ class AppSyncEventsService {
     }
   }
 
-  private buildWebSocketUrl(): string {
-    // URL should be the HTTP endpoint like: https://xxx.appsync-api.region.amazonaws.com/event
-    const httpUrl = new URL(this.url);
-    const realtimeHost = httpUrl.host.replace('.appsync-api.', '.appsync-realtime-api.');
-    return `wss://${realtimeHost}/event/realtime`;
-  }
-
   private getBase64URLEncoded(obj: any): string {
     return btoa(JSON.stringify(obj))
       .replace(/\+/g, '-')
@@ -103,13 +100,11 @@ class AppSyncEventsService {
   }
 
   private getAuthSubprotocol(): string {
-    // CRITICAL: Use HTTP endpoint host for auth, not realtime host
-    // URL should be like: https://xxx.appsync-api.region.amazonaws.com/event
-    const httpUrl = new URL(this.url);
-    const httpHost = httpUrl.host.replace('.appsync-realtime-api.', '.appsync-api.');
+    // Use HTTP endpoint host for auth (not realtime host)
+    const httpUrl = new URL(this.httpEndpoint);
     
     const authObject = {
-      host: httpHost,
+      host: httpUrl.host,
       Authorization: this.authToken
     };
     
@@ -123,7 +118,9 @@ class AppSyncEventsService {
 
   private handleMessage(event: MessageEvent): void {
     try {
+      console.log('[AppSync Events] Raw message received:', event.data);
       const message = JSON.parse(event.data);
+      console.log('[AppSync Events] Parsed message:', message);
       
       if (message.type === 'connection_ack') {
         console.log('[AppSync Events] Connection acknowledged');
@@ -139,18 +136,27 @@ class AppSyncEventsService {
         return;
       }
       
+      if (message.type === 'error') {
+        console.error('[AppSync Events] Error message received:', message.errors);
+        return;
+      }
+      
       if (message.type === 'subscribe_success') {
         console.log('[AppSync Events] Subscription confirmed:', message.id);
         return;
       }
 
       if (message.type === 'data') {
+        console.log('[AppSync Events] Data message received:', message);
         const channel = this.subscriptionIdToChannel.get(message.id);
         if (channel) {
           const callbacks = this.subscriptions.get(channel);
           // Parse the event string into an object
           const eventData = typeof message.event === 'string' ? JSON.parse(message.event) : message.event;
+          console.log('[AppSync Events] Dispatching event to callbacks:', eventData);
           callbacks?.forEach(sub => sub.callback(eventData));
+        } else {
+          console.warn('[AppSync Events] No channel found for subscription:', message.id);
         }
       }
     } catch (error) {
@@ -174,9 +180,15 @@ class AppSyncEventsService {
   }
 
   private startHeartbeat(): void {
+    // AppSync Events server sends "ka" (keep-alive) messages to the client
+    // The client should NOT send ping messages - just track the last received "ka"
+    // If we don't receive a "ka" within connectionTimeoutMs, we should reconnect
     this.heartbeatInterval = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'ping' }));
+      // Just a placeholder to check connection health
+      // The actual keep-alive is handled by the server's "ka" messages
+      if (this.ws?.readyState !== WebSocket.OPEN) {
+        console.warn('[AppSync Events] WebSocket not open, reconnecting...');
+        this.scheduleReconnection();
       }
     }, 30000);
   }
@@ -224,7 +236,7 @@ class AppSyncEventsService {
       
       this.subscriptionIdToChannel.set(subscriptionId, channel);
       
-      const httpUrl = new URL(this.url);
+      const httpUrl = new URL(this.httpEndpoint);
       this.ws.send(JSON.stringify({
         type: 'subscribe',
         id: subscriptionId,

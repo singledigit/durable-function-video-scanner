@@ -27,17 +27,19 @@ export async function publishEvent(event: EventData): Promise<void> {
     const url = new URL(APPSYNC_EVENTS_API_URL);
     
     // Publish to both user-specific channel and admin channel
+    // Channels must start with / per AppSync Events API requirements
     const channels = [
-      `default/scan-updates-${event.userId}`,
+      `/default/scan-updates-${event.userId}`,
     ];
     
     // Add admin channel for PENDING_REVIEW events
     if (event.type === 'PENDING_REVIEW') {
-      channels.push('default/admin-pending-reviews');
+      channels.push('/default/admin-pending-reviews');
     }
     
     // Publish to each channel separately
     for (const channel of channels) {
+      // Events must be stringified JSON per AppSync Events API requirements
       const body = JSON.stringify({
         channel,
         events: [JSON.stringify(event)],

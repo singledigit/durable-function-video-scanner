@@ -10,7 +10,11 @@ export const useRealtimeUpdates = () => {
 
     try {
       const token = await getIdToken();
-      appSyncEvents.configure(config.public.appSyncEventsEndpoint, token);
+      appSyncEvents.configure(
+        config.public.appSyncHttpEndpoint,
+        config.public.appSyncRealtimeEndpoint,
+        token
+      );
       
       await appSyncEvents.connect();
       connected.value = true;
