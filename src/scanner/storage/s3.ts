@@ -5,7 +5,7 @@ import { withRetry, StorageError } from '../errors';
 export async function saveReportsToS3(
   bucketName: string,
   scanId: string,
-  completeResult: any
+  completeResult: Record<string, unknown>
 ): Promise<{ jsonReportKey: string }> {
   logger.info('Saving scan results to S3');
   

@@ -12,7 +12,7 @@ const headers = {
   'Access-Control-Allow-Methods': 'GET,PUT,OPTIONS'
 };
 
-export const handler = async (event: any) => {
+export const handler = async (event: { requestContext: { authorizer: { claims: { sub: string } } }; httpMethod: string; body?: string }) => {
   const userId = event.requestContext.authorizer.claims.sub;
   const method = event.httpMethod;
 

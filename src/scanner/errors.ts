@@ -117,7 +117,7 @@ export function isRetryableError(error: Error): boolean {
 export async function withRetry<T>(
   fn: () => Promise<T>,
   config: RetryConfig = DEFAULT_RETRY_CONFIG,
-  logger?: { warn: (msg: string, context?: any) => void }
+  logger?: { warn: (msg: string, context?: Record<string, unknown>) => void }
 ): Promise<T> {
   let lastError: Error;
   let delay = config.initialDelayMs;

@@ -5,6 +5,10 @@
 # Ignore TypeScript config
 tsconfig.json
 
+# Ignore ESLint config
+eslint.config.*
+.eslintignore
+
 # Ignore node_modules (SAM will bundle dependencies)
 node_modules/
 

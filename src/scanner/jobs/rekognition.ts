@@ -91,7 +91,7 @@ export async function runRekognitionWorkflow(
       logger.info('Fetching text detection results', { jobId });
       
       // Fetch all pages of results
-      const textDetections: any[] = [];
+      const textDetections: unknown[] = [];
       let nextToken: string | undefined;
       
       do {
@@ -114,7 +114,7 @@ export async function runRekognitionWorkflow(
         text: string;
         timestamp: number;
         confidence: number;
-        boundingBox?: any;
+        boundingBox?: unknown;
       }> = [];
       
       const seenText = new Map<string, number>(); // text -> first timestamp

@@ -1,13 +1,13 @@
 import { InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
-import { logger, bedrock, BEDROCK_MODEL_ID, ToxicityResult, SentimentResult, PiiResult, VideoTextData } from '../config';
-import { withRetry, BedrockError } from '../errors';
+import { logger, bedrock, BEDROCK_MODEL_ID, ToxicityResult, SentimentResult, PiiResult, VideoTextData, MappedResults, ToxicityLabel } from '../config';
+import { withRetry } from '../errors';
 
 export async function generateAISummary(
   toxicityResults: ToxicityResult,
   sentimentResults: SentimentResult,
   piiResults: PiiResult,
   videoTextData: VideoTextData | null,
-  mappedResults: any,
+  mappedResults: MappedResults,
   objectKey: string,
   objectSize: number
 ): Promise<{ summary: string; modelId?: string; generatedAt: string; error?: string }> {
@@ -25,7 +25,7 @@ ANALYSIS RESULTS:
 1. TOXICITY DETECTION:
 ${toxicityResults.hasToxicContent ? 
   `⚠️ TOXIC CONTENT DETECTED
-${(toxicityResults.labels || []).map((l: any) => `   - ${l.Name}: ${(l.Score * 100).toFixed(1)}%`).join('\n')}` :
+${(toxicityResults.labels || []).map((l: ToxicityLabel) => `   - ${l.Name}: ${(l.Score * 100).toFixed(1)}%`).join('\n')}` :
   '✓ No toxic content detected'}
 
 2. SENTIMENT ANALYSIS:

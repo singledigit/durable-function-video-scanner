@@ -4,7 +4,8 @@
   "description": "Unified callback handler for durable execution",
   "main": "index.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint . --ext .ts"
   },
   "dependencies": {
     "@aws-lambda-powertools/logger": "^2.10.0",
@@ -15,6 +16,9 @@
   "devDependencies": {
     "@types/aws-lambda": "^8.10.145",
     "@types/node": "^22.10.2",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
     "typescript": "^5.7.2"
   }
 }

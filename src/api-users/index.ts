@@ -16,7 +16,7 @@ const headers = {
   'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS'
 };
 
-export const handler = async (event: any) => {
+export const handler = async (event: { httpMethod: string; path: string; body?: string; requestContext?: { authorizer?: { claims?: { sub: string } } } }) => {
   const method = event.httpMethod;
   const path = event.path;
 
@@ -130,12 +130,12 @@ export const handler = async (event: any) => {
       headers,
       body: JSON.stringify({ error: 'Method not allowed' })
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('User management error:', error);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: error.message || 'Internal server error' })
+      body: JSON.stringify({ error: error instanceof Error ? error.message : 'Internal server error' })
     };
   }
 };

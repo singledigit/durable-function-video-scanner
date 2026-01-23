@@ -1,4 +1,4 @@
-import { logger, TranscriptData, VideoTextData, CorpusData } from '../config';
+import { logger, TranscriptData, VideoTextData, CorpusData, PiiResult, MappedResults, MappedPIIEntity } from '../config';
 
 export function buildCorpus(
   transcriptData: TranscriptData,
@@ -12,7 +12,7 @@ export function buildCorpus(
     endOffset: number;
     source: 'audio' | 'screen';
     timestamp?: number;
-    boundingBox?: any;
+    boundingBox?: unknown;
     text: string;
   }> = [];
   
@@ -69,10 +69,10 @@ export function buildCorpus(
 }
 
 export function mapResultsToSources(
-  piiResults: any,
+  piiResults: PiiResult,
   positionIndex: CorpusData['positionIndex'],
   combinedText: string
-) {
+): MappedResults {
   logger.info('Mapping results to sources');
   
   // Helper function to map character offset to source
@@ -91,7 +91,7 @@ export function mapResultsToSources(
   };
   
   // Map PII entities to sources
-  const mappedPII = piiResults.entities.map((entity: any) => {
+  const mappedPII: MappedPIIEntity[] = piiResults.entities.map((entity) => {
     const sourceInfo = mapOffsetToSource(entity.beginOffset);
     return {
       ...entity,
@@ -104,11 +104,11 @@ export function mapResultsToSources(
   
   // Group by source
   const audioIssues = {
-    pii: mappedPII.filter((e: any) => e.source === 'audio').length
+    pii: mappedPII.filter((e) => e.source === 'audio').length
   };
   
   const screenIssues = {
-    pii: mappedPII.filter((e: any) => e.source === 'screen').length
+    pii: mappedPII.filter((e) => e.source === 'screen').length
   };
   
   logger.info('Source mapping completed', {

@@ -1,4 +1,4 @@
-.PHONY: all clean install
+.PHONY: all clean install lint
 
 all: install
 
@@ -20,3 +20,13 @@ install: clean
 		fi \
 	done
 	@echo "Done!"
+
+lint:
+	@echo "Running lint on all Lambda functions..."
+	@for dir in src/*/; do \
+		if [ -f "$$dir/package.json" ]; then \
+			echo "Linting $$dir"; \
+			cd "$$dir" && npm run lint && cd ../..; \
+		fi \
+	done
+	@echo "Lint complete!"

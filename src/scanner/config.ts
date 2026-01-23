@@ -79,7 +79,7 @@ export interface PiiResult {
 export interface TranscriptData {
   fullText: string;
   transcriptUri: string;
-  transcript: any;
+  transcript: unknown;
   transcriptionResult: string;
 }
 
@@ -89,7 +89,7 @@ export interface VideoTextData {
     text: string;
     timestamp: number;
     confidence: number;
-    boundingBox?: any;
+    boundingBox?: unknown;
   }>;
   detectionCount: number;
 }
@@ -101,7 +101,35 @@ export interface CorpusData {
     endOffset: number;
     source: 'audio' | 'screen';
     timestamp?: number;
-    boundingBox?: any;
+    boundingBox?: unknown;
     text: string;
   }>;
+}
+
+export interface MappedPIIEntity {
+  type: string;
+  score: number;
+  beginOffset: number;
+  endOffset: number;
+  source: string;
+  timestamp?: number;
+  boundingBox?: unknown;
+  detectedText: string;
+}
+
+export interface MappedResults {
+  pii: MappedPIIEntity[];
+  summary: {
+    audioIssues: {
+      pii: number;
+    };
+    screenIssues: {
+      pii: number;
+    };
+  };
+}
+
+export interface ToxicityLabel {
+  Name: string;
+  Score: number;
 }

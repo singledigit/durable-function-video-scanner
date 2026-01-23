@@ -15,7 +15,7 @@ const SCANNER_TABLE = process.env.SCANNER_TABLE!;
 
 // Event type detection
 interface EventBridgeEvent {
-  detail: Record<string, any>;
+  detail: Record<string, unknown>;
   'detail-type': string;
 }
 
@@ -34,7 +34,7 @@ interface ApiGatewayEvent {
 }
 
 interface DirectInvokeEvent {
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEvent | DirectInvokeEvent) => {
@@ -58,7 +58,7 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
   try {
     // Detect event source and extract job identifier
     let jobName: string;
-    let result: any;
+    let result: unknown;
     let isFailure = false;
     let errorInfo: { type?: string; message?: string; data?: string } = {};
 
@@ -242,7 +242,7 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
         CallbackId: callbackToken,
         Error: {
           Message: errorInfo.message
-        } as any
+        }
       });
       
       await lambda.send(command);

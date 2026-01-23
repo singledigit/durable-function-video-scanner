@@ -1,7 +1,7 @@
 import { DurableContext } from '@aws/durable-execution-sdk-js';
 import { PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
-import { logger, ddb, SCANNER_TABLE, CALLBACK_RETRY_STRATEGY } from '../config';
+import { logger, ddb, SCANNER_TABLE, CALLBACK_RETRY_STRATEGY, ToxicityResult, PiiResult, SentimentResult } from '../config';
 import { withRetry, StorageError } from '../errors';
 
 export async function saveScanMetadata(
@@ -13,10 +13,10 @@ export async function saveScanMetadata(
   objectSize: number,
   overallAssessment: 'SAFE' | 'CAUTION' | 'UNSAFE',
   status: string,
-  toxicityResults: any,
-  piiResults: any,
-  sentimentResults: any,
-  aiSummary: any,
+  toxicityResults: ToxicityResult,
+  piiResults: PiiResult,
+  sentimentResults: SentimentResult,
+  aiSummary: { summary: string; modelId?: string; generatedAt: string; error?: string },
   jsonReportKey: string
 ): Promise<void> {
   logger.info('Saving scan metadata to DynamoDB', { scanId, userId });
@@ -157,10 +157,10 @@ export async function updateApprovalStatus(
   objectSize: number,
   overallAssessment: 'SAFE' | 'CAUTION' | 'UNSAFE',
   status: string,
-  toxicityResults: any,
-  piiResults: any,
-  sentimentResults: any,
-  aiSummary: any,
+  toxicityResults: ToxicityResult,
+  piiResults: PiiResult,
+  sentimentResults: SentimentResult,
+  aiSummary: { summary: string; modelId?: string; generatedAt: string; error?: string },
   jsonReportKey: string,
   approvalResult: {
     approved: boolean;

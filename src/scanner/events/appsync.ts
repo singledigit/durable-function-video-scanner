@@ -11,7 +11,7 @@ interface EventData {
   scanId: string;
   userId: string;
   timestamp: string;
-  data?: any;
+  data?: Record<string, unknown>;
 }
 
 /**
