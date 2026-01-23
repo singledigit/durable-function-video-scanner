@@ -43,7 +43,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
         type: 'SCAN_STARTED',
         scanId,
         userId,
-        timestamp: uploadedAt, // Use initial timestamp for start event
+        timestamp: new Date().toISOString(),
         data: { objectKey, objectSize },
       });
     });

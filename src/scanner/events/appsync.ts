@@ -1,3 +1,4 @@
+import { DurableContext } from '@aws/durable-execution-sdk-js';
 import { SignatureV4 } from '@smithy/signature-v4';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { HttpRequest } from '@smithy/protocol-http';

@@ -1,6 +1,7 @@
 import { DetectPiiEntitiesCommand } from '@aws-sdk/client-comprehend';
 import { logger, comprehend, PiiResult } from '../config';
 import { withRetry, AnalysisError } from '../errors';
+import { prepareTextForAnalysis } from './utils';
 
 export async function detectPII(text: string): Promise<PiiResult> {
   logger.info('Detecting PII', { textLength: text.length });
@@ -18,17 +19,12 @@ export async function detectPII(text: string): Promise<PiiResult> {
   
   // Comprehend PII has a 100KB limit
   const MAX_BYTES = 100000;
-  const textBytes = Buffer.byteLength(text, 'utf8');
-  
-  // If text is too large, analyze first 100KB
-  const textToAnalyze = textBytes > MAX_BYTES 
-    ? text.substring(0, Math.floor(text.length * (MAX_BYTES / textBytes)))
-    : text;
+  const prepared = prepareTextForAnalysis(text, MAX_BYTES);
   
   try {
     const response = await withRetry(
       async () => comprehend.send(new DetectPiiEntitiesCommand({
-        Text: textToAnalyze,
+        Text: prepared.text,
         LanguageCode: 'en'
       })),
       undefined,
@@ -49,7 +45,7 @@ export async function detectPII(text: string): Promise<PiiResult> {
       hasPII,
       entityCount: entities.length,
       entityTypes: Object.keys(entityTypes),
-      truncated: textBytes > MAX_BYTES
+      truncated: prepared.truncated
     });
     
     return {
@@ -62,8 +58,8 @@ export async function detectPII(text: string): Promise<PiiResult> {
         beginOffset: e.BeginOffset!,
         endOffset: e.EndOffset!
       })),
-      truncated: textBytes > MAX_BYTES,
-      analyzedBytes: Buffer.byteLength(textToAnalyze, 'utf8')
+      truncated: prepared.truncated,
+      analyzedBytes: prepared.analyzedBytes
     };
   } catch (error) {
     logger.error('PII detection failed', {

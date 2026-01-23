@@ -1,6 +1,7 @@
 import { DetectToxicContentCommand } from '@aws-sdk/client-comprehend';
 import { logger, comprehend, ToxicityResult } from '../config';
 import { withRetry, AnalysisError } from '../errors';
+import { chunkTextByBytes } from './utils';
 
 export async function analyzeToxicity(text: string): Promise<ToxicityResult> {
   logger.info('Checking toxicity', { textLength: text.length });
@@ -21,20 +22,7 @@ export async function analyzeToxicity(text: string): Promise<ToxicityResult> {
     // For large texts, chunk and analyze
     logger.info('Text exceeds 100KB, chunking for analysis', { textBytes });
     
-    const chunks: string[] = [];
-    let currentChunk = '';
-    const words = text.split(/\s+/);
-    
-    for (const word of words) {
-      const testChunk = currentChunk + (currentChunk ? ' ' : '') + word;
-      if (Buffer.byteLength(testChunk, 'utf8') > MAX_BYTES) {
-        if (currentChunk) chunks.push(currentChunk);
-        currentChunk = word;
-      } else {
-        currentChunk = testChunk;
-      }
-    }
-    if (currentChunk) chunks.push(currentChunk);
+    const chunks = chunkTextByBytes(text, MAX_BYTES);
     
     logger.info('Analyzing chunks', { chunkCount: chunks.length });
     

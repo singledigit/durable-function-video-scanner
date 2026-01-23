@@ -1,6 +1,7 @@
 import { DetectSentimentCommand } from '@aws-sdk/client-comprehend';
 import { logger, comprehend, SentimentResult } from '../config';
 import { withRetry, AnalysisError } from '../errors';
+import { prepareTextForAnalysis } from './utils';
 
 export async function analyzeSentiment(text: string): Promise<SentimentResult> {
   logger.info('Analyzing sentiment', { textLength: text.length });
@@ -15,17 +16,12 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
   
   // Comprehend sentiment has a 5KB limit
   const MAX_BYTES = 5000;
-  const textBytes = Buffer.byteLength(text, 'utf8');
-  
-  // If text is too large, analyze first 5KB
-  const textToAnalyze = textBytes > MAX_BYTES 
-    ? text.substring(0, Math.floor(text.length * (MAX_BYTES / textBytes)))
-    : text;
+  const prepared = prepareTextForAnalysis(text, MAX_BYTES);
   
   try {
     const response = await withRetry(
       async () => comprehend.send(new DetectSentimentCommand({
-        Text: textToAnalyze,
+        Text: prepared.text,
         LanguageCode: 'en'
       })),
       undefined,
@@ -34,7 +30,7 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
     
     logger.info('Sentiment analysis completed', { 
       sentiment: response.Sentiment,
-      truncated: textBytes > MAX_BYTES
+      truncated: prepared.truncated
     });
     
     return {
@@ -45,8 +41,8 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
         Neutral: response.SentimentScore.Neutral ?? 0,
         Mixed: response.SentimentScore.Mixed ?? 0
       } : undefined,
-      truncated: textBytes > MAX_BYTES,
-      analyzedBytes: Buffer.byteLength(textToAnalyze, 'utf8')
+      truncated: prepared.truncated,
+      analyzedBytes: prepared.analyzedBytes
     };
   } catch (error) {
     logger.error('Sentiment analysis failed', {
