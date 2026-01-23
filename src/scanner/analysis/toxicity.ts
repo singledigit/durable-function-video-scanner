@@ -1,6 +1,6 @@
 import { DetectToxicContentCommand } from '@aws-sdk/client-comprehend';
 import { logger, comprehend, ToxicityResult } from '../config';
-import { withRetry, AnalysisError } from '../errors';
+import { AnalysisError } from '../errors';
 import { chunkTextByBytes } from './utils';
 
 export async function analyzeToxicity(text: string): Promise<ToxicityResult> {
@@ -75,14 +75,10 @@ export async function analyzeToxicity(text: string): Promise<ToxicityResult> {
   } else {
     // Single request for smaller texts
     try {
-      const response = await withRetry(
-        async () => comprehend.send(new DetectToxicContentCommand({
-          TextSegments: [{ Text: text }],
-          LanguageCode: 'en'
-        })),
-        undefined,
-        logger
-      );
+      const response = await comprehend.send(new DetectToxicContentCommand({
+        TextSegments: [{ Text: text }],
+        LanguageCode: 'en'
+      }));
       
       const rawLabels = response.ResultList?.[0]?.Labels || [];
       const labels = rawLabels.map(label => ({

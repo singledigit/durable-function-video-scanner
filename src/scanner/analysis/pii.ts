@@ -1,6 +1,6 @@
 import { DetectPiiEntitiesCommand } from '@aws-sdk/client-comprehend';
 import { logger, comprehend, PiiResult } from '../config';
-import { withRetry, AnalysisError } from '../errors';
+import { AnalysisError } from '../errors';
 import { prepareTextForAnalysis } from './utils';
 
 export async function detectPII(text: string): Promise<PiiResult> {
@@ -22,14 +22,10 @@ export async function detectPII(text: string): Promise<PiiResult> {
   const prepared = prepareTextForAnalysis(text, MAX_BYTES);
   
   try {
-    const response = await withRetry(
-      async () => comprehend.send(new DetectPiiEntitiesCommand({
-        Text: prepared.text,
-        LanguageCode: 'en'
-      })),
-      undefined,
-      logger
-    );
+    const response = await comprehend.send(new DetectPiiEntitiesCommand({
+      Text: prepared.text,
+      LanguageCode: 'en'
+    }));
     
     const entities = response.Entities || [];
     const hasPII = entities.length > 0;

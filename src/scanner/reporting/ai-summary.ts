@@ -1,6 +1,5 @@
 import { InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { logger, bedrock, BEDROCK_MODEL_ID, ToxicityResult, SentimentResult, PiiResult, VideoTextData, MappedResults, ToxicityLabel } from '../config';
-import { withRetry } from '../errors';
 
 export async function generateAISummary(
   toxicityResults: ToxicityResult,
@@ -83,11 +82,7 @@ Keep it concise and actionable.`;
       body: JSON.stringify(requestBody)
     });
 
-    const response = await withRetry(
-      async () => bedrock.send(command),
-      undefined,
-      logger
-    );
+    const response = await bedrock.send(command);
     
     const responseBody = JSON.parse(new TextDecoder().decode(response.body));
     

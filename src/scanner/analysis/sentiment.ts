@@ -1,6 +1,6 @@
 import { DetectSentimentCommand } from '@aws-sdk/client-comprehend';
 import { logger, comprehend, SentimentResult } from '../config';
-import { withRetry, AnalysisError } from '../errors';
+import { AnalysisError } from '../errors';
 import { prepareTextForAnalysis } from './utils';
 
 export async function analyzeSentiment(text: string): Promise<SentimentResult> {
@@ -19,14 +19,10 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
   const prepared = prepareTextForAnalysis(text, MAX_BYTES);
   
   try {
-    const response = await withRetry(
-      async () => comprehend.send(new DetectSentimentCommand({
-        Text: prepared.text,
-        LanguageCode: 'en'
-      })),
-      undefined,
-      logger
-    );
+    const response = await comprehend.send(new DetectSentimentCommand({
+      Text: prepared.text,
+      LanguageCode: 'en'
+    }));
     
     logger.info('Sentiment analysis completed', { 
       sentiment: response.Sentiment,

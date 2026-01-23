@@ -2,7 +2,48 @@ import { DurableContext } from '@aws/durable-execution-sdk-js';
 import { PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { logger, ddb, SCANNER_TABLE, CALLBACK_RETRY_STRATEGY, ToxicityResult, PiiResult, SentimentResult } from '../config';
-import { withRetry, StorageError } from '../errors';
+import { StorageError } from '../errors';
+
+/**
+ * Helper to put an item to DynamoDB with marshalling
+ */
+async function putItem(item: Record<string, unknown>): Promise<void> {
+  await ddb.send(new PutItemCommand({
+    TableName: SCANNER_TABLE,
+    Item: marshall(item, { removeUndefinedValues: true })
+  }));
+}
+
+/**
+ * Helper to put an item to DynamoDB with marshalling and error handling
+ */
+async function putItemWithErrorHandling(
+  item: Record<string, unknown>,
+  errorContext: { operation: string; scanId: string; userId?: string }
+): Promise<void> {
+  try {
+    await putItem(item);
+    
+    logger.info(`${errorContext.operation} saved to DynamoDB`, { 
+      scanId: errorContext.scanId,
+      userId: errorContext.userId 
+    });
+  } catch (error) {
+    logger.error(`Failed to ${errorContext.operation.toLowerCase()}`, {
+      error: error instanceof Error ? error.message : String(error),
+      errorName: error instanceof Error ? error.name : 'Unknown',
+      scanId: errorContext.scanId,
+      userId: errorContext.userId
+    });
+    
+    throw new StorageError(
+      `Failed to ${errorContext.operation.toLowerCase()}`,
+      'write',
+      `dynamodb://${SCANNER_TABLE}/SCAN#${errorContext.scanId}`,
+      error instanceof Error ? error : undefined
+    );
+  }
+}
 
 export async function saveScanMetadata(
   scanId: string,
@@ -23,55 +64,37 @@ export async function saveScanMetadata(
   
   const completedAt = new Date().toISOString();
   
-  try {
-    await withRetry(
-      async () => ddb.send(new PutItemCommand({
-        TableName: SCANNER_TABLE,
-        Item: marshall({
-          PK: `SCAN#${scanId}`,
-          SK: 'METADATA',
-          EntityType: 'ScanResult',
-          GSI1PK: `USER#${userId}`,
-          GSI1SK: uploadedAt,
-          GSI2PK: 'STATUS#PENDING_REVIEW',
-          GSI2SK: uploadedAt,
-          scanId,
-          userId,
-          objectKey,
-          bucketName,
-          status,
-          approvalStatus: 'PENDING_REVIEW',
-          uploadedAt,
-          completedAt,
-          fileSize: objectSize,
-          overallAssessment,
-          hasToxicContent: toxicityResults.hasToxicContent,
-          hasPII: piiResults.hasPII,
-          sentiment: sentimentResults.sentiment,
-          aiSummary: aiSummary.summary,
-          reportS3Key: jsonReportKey
-        }, { removeUndefinedValues: true })
-      })),
-      undefined,
-      logger
-    );
-    
-    logger.info('Scan metadata saved to DynamoDB', { scanId, userId });
-  } catch (error) {
-    logger.error('Failed to save scan metadata to DynamoDB', {
-      error: error instanceof Error ? error.message : String(error),
-      errorName: error instanceof Error ? error.name : 'Unknown',
+  await putItemWithErrorHandling(
+    {
+      PK: `SCAN#${scanId}`,
+      SK: 'METADATA',
+      EntityType: 'ScanResult',
+      GSI1PK: `USER#${userId}`,
+      GSI1SK: uploadedAt,
+      GSI2PK: 'STATUS#PENDING_REVIEW',
+      GSI2SK: uploadedAt,
+      scanId,
+      userId,
+      objectKey,
+      bucketName,
+      status,
+      approvalStatus: 'PENDING_REVIEW',
+      uploadedAt,
+      completedAt,
+      fileSize: objectSize,
+      overallAssessment,
+      hasToxicContent: toxicityResults.hasToxicContent,
+      hasPII: piiResults.hasPII,
+      sentiment: sentimentResults.sentiment,
+      aiSummary: aiSummary.summary,
+      reportS3Key: jsonReportKey
+    },
+    {
+      operation: 'Scan metadata',
       scanId,
       userId
-    });
-    
-    throw new StorageError(
-      'Failed to save scan metadata',
-      'write',
-      `dynamodb://${SCANNER_TABLE}/SCAN#${scanId}`,
-      error instanceof Error ? error : undefined
-    );
-  }
+    }
+  );
 }
 
 export async function waitForApproval(
@@ -98,22 +121,20 @@ export async function waitForApproval(
         logger.info('Waiting for human approval', { scanId, callbackToken });
         
         // Store callback token in DynamoDB for approval workflow
-        await ddb.send(new PutItemCommand({
-          TableName: SCANNER_TABLE,
-          Item: marshall({
-            PK: `SCAN#${scanId}`,
-            SK: 'TOKEN#approval',
-            EntityType: 'CallbackToken',
-            jobName: `approval-${scanId}`,
-            callbackToken,
-            scanId,
-            userId,
-            bucketName,
-            objectKey,
-            createdAt: new Date().toISOString(),
-            ttl: Math.floor(Date.now() / 1000) + (3 * 86400) // 3 days TTL
-          })
-        }));
+        // Note: Using custom TTL of 3 days for approval tokens
+        await putItem({
+          PK: `SCAN#${scanId}`,
+          SK: 'TOKEN#approval',
+          EntityType: 'CallbackToken',
+          jobName: `approval-${scanId}`,
+          callbackToken,
+          scanId,
+          userId,
+          bucketName,
+          objectKey,
+          createdAt: new Date().toISOString(),
+          ttl: Math.floor(Date.now() / 1000) + (3 * 86400) // 3 days TTL
+        });
         
         logger.info('Approval callback token stored', { 
           scanId,
@@ -183,36 +204,33 @@ export async function updateApprovalStatus(
   const completedAt = new Date().toISOString();
   
   // Update DynamoDB with final approval status
-  await ddb.send(new PutItemCommand({
-    TableName: SCANNER_TABLE,
-    Item: marshall({
-      PK: `SCAN#${scanId}`,
-      SK: 'METADATA',
-      EntityType: 'ScanResult',
-      GSI1PK: `USER#${userId}`,
-      GSI1SK: uploadedAt,
-      GSI2PK: `STATUS#${finalApprovalStatus}`,
-      GSI2SK: uploadedAt,
-      scanId,
-      userId,
-      objectKey,
-      bucketName,
-      status,
-      approvalStatus: finalApprovalStatus,
-      uploadedAt,
-      completedAt,
-      reviewedAt: approvalResult.reviewedAt,
-      reviewedBy: approvalResult.reviewedBy,
-      reviewComments: approvalResult.comments || '',
-      fileSize: objectSize,
-      overallAssessment,
-      hasToxicContent: toxicityResults.hasToxicContent,
-      hasPII: piiResults.hasPII,
-      sentiment: sentimentResults.sentiment,
-      aiSummary: aiSummary.summary,
-      reportS3Key: jsonReportKey
-    }, { removeUndefinedValues: true })
-  }));
+  await putItem({
+    PK: `SCAN#${scanId}`,
+    SK: 'METADATA',
+    EntityType: 'ScanResult',
+    GSI1PK: `USER#${userId}`,
+    GSI1SK: uploadedAt,
+    GSI2PK: `STATUS#${finalApprovalStatus}`,
+    GSI2SK: uploadedAt,
+    scanId,
+    userId,
+    objectKey,
+    bucketName,
+    status,
+    approvalStatus: finalApprovalStatus,
+    uploadedAt,
+    completedAt,
+    reviewedAt: approvalResult.reviewedAt,
+    reviewedBy: approvalResult.reviewedBy,
+    reviewComments: approvalResult.comments || '',
+    fileSize: objectSize,
+    overallAssessment,
+    hasToxicContent: toxicityResults.hasToxicContent,
+    hasPII: piiResults.hasPII,
+    sentiment: sentimentResults.sentiment,
+    aiSummary: aiSummary.summary,
+    reportS3Key: jsonReportKey
+  });
   
   logger.info('Approval status updated in DynamoDB', { 
     scanId,

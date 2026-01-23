@@ -1,18 +1,15 @@
 import { DurableContext } from '@aws/durable-execution-sdk-js';
 import { StartTranscriptionJobCommand, GetTranscriptionJobCommand } from '@aws-sdk/client-transcribe';
-import { PutItemCommand } from '@aws-sdk/client-dynamodb';
-import { marshall } from '@aws-sdk/util-dynamodb';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { 
   logger, 
   transcribe, 
-  ddb, 
   s3,
-  SCANNER_TABLE,
   CALLBACK_TIMEOUT_SECONDS,
   CALLBACK_RETRY_STRATEGY,
   TranscriptData
 } from '../config';
+import { storeCallbackToken } from '../storage/callback-tokens';
 
 export async function runTranscribeWorkflow(
   context: DurableContext,
@@ -29,20 +26,10 @@ export async function runTranscribeWorkflow(
       logger.info('Starting transcription job', { jobName, objectKey, scanId });
       
       // Store callback token in DynamoDB
-      await ddb.send(new PutItemCommand({
-        TableName: SCANNER_TABLE,
-        Item: marshall({
-          PK: `SCAN#${scanId}`,
-          SK: `TOKEN#${jobName}`,
-          EntityType: 'CallbackToken',
-          jobName,
-          callbackToken,
-          bucketName,
-          objectKey,
-          createdAt: new Date().toISOString(),
-          ttl: Math.floor(Date.now() / 1000) + 86400 // 24 hours TTL
-        })
-      }));
+      await storeCallbackToken(scanId, jobName, callbackToken, {
+        bucketName,
+        objectKey
+      });
       
       logger.info('Callback token stored in DynamoDB', { jobName });
       

@@ -1,18 +1,15 @@
 import { DurableContext } from '@aws/durable-execution-sdk-js';
 import { StartTextDetectionCommand, GetTextDetectionCommand } from '@aws-sdk/client-rekognition';
-import { PutItemCommand } from '@aws-sdk/client-dynamodb';
-import { marshall } from '@aws-sdk/util-dynamodb';
 import { 
   logger, 
-  rekognition, 
-  ddb,
-  SCANNER_TABLE,
+  rekognition,
   REKOGNITION_ROLE_ARN,
   REKOGNITION_SNS_TOPIC_ARN,
   CALLBACK_TIMEOUT_SECONDS,
   CALLBACK_RETRY_STRATEGY,
   VideoTextData
 } from '../config';
+import { storeCallbackToken } from '../storage/callback-tokens';
 
 export async function runRekognitionWorkflow(
   context: DurableContext,
@@ -30,21 +27,11 @@ export async function runRekognitionWorkflow(
         logger.info('Starting Rekognition text detection job', { jobName, objectKey, scanId });
         
         // Store callback token in DynamoDB
-        await ddb.send(new PutItemCommand({
-          TableName: SCANNER_TABLE,
-          Item: marshall({
-            PK: `SCAN#${scanId}`,
-            SK: `TOKEN#${jobName}`,
-            EntityType: 'CallbackToken',
-            jobName,
-            callbackToken,
-            bucketName,
-            objectKey,
-            jobType: 'rekognition',
-            createdAt: new Date().toISOString(),
-            ttl: Math.floor(Date.now() / 1000) + 86400 // 24 hours TTL
-          })
-        }));
+        await storeCallbackToken(scanId, jobName, callbackToken, {
+          bucketName,
+          objectKey,
+          jobType: 'rekognition'
+        });
         
         logger.info('Rekognition callback token stored in DynamoDB', { jobName });
         

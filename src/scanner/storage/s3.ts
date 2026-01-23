@@ -1,6 +1,6 @@
 import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { logger, s3 } from '../config';
-import { withRetry, StorageError } from '../errors';
+import { StorageError } from '../errors';
 
 export async function saveReportsToS3(
   bucketName: string,
@@ -12,16 +12,12 @@ export async function saveReportsToS3(
   try {
     // Save full JSON report to S3
     const jsonReportKey = `reports/${scanId}.json`;
-    await withRetry(
-      async () => s3.send(new PutObjectCommand({
-        Bucket: bucketName,
-        Key: jsonReportKey,
-        Body: JSON.stringify(completeResult, null, 2),
-        ContentType: 'application/json'
-      })),
-      undefined,
-      logger
-    );
+    await s3.send(new PutObjectCommand({
+      Bucket: bucketName,
+      Key: jsonReportKey,
+      Body: JSON.stringify(completeResult, null, 2),
+      ContentType: 'application/json'
+    }));
     
     logger.info('JSON report saved to S3', { jsonReportKey });
     
