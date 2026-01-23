@@ -1,7 +1,7 @@
 import { DurableContext } from '@aws/durable-execution-sdk-js';
 import { PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
-import { logger, ddb, SCANNER_TABLE, CALLBACK_RETRY_STRATEGY, ToxicityResult, PiiResult, SentimentResult } from '../config';
+import { logger, ddb, SCANNER_TABLE, CALLBACK_RETRY_STRATEGY, TIMEOUTS, ToxicityResult, PiiResult, SentimentResult } from '../config';
 import { StorageError } from '../errors';
 
 /**
@@ -133,7 +133,7 @@ export async function waitForApproval(
           bucketName,
           objectKey,
           createdAt: new Date().toISOString(),
-          ttl: Math.floor(Date.now() / 1000) + (3 * 86400) // 3 days TTL
+          ttl: Math.floor(Date.now() / 1000) + TIMEOUTS.APPROVAL_TOKEN_TTL_SECONDS
         });
         
         logger.info('Approval callback token stored', { 
@@ -142,7 +142,7 @@ export async function waitForApproval(
         });
       },
       {
-        timeout: { seconds: 259200 }, // 3 days = 259200 seconds
+        timeout: { seconds: TIMEOUTS.APPROVAL_SECONDS },
         retryStrategy: CALLBACK_RETRY_STRATEGY
       }
     );

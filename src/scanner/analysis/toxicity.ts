@@ -1,5 +1,5 @@
 import { DetectToxicContentCommand } from '@aws-sdk/client-comprehend';
-import { logger, comprehend, ToxicityResult } from '../config';
+import { logger, comprehend, SERVICE_LIMITS, THRESHOLDS, ToxicityResult } from '../config';
 import { AnalysisError } from '../errors';
 import { chunkTextByBytes } from './utils';
 
@@ -15,14 +15,13 @@ export async function analyzeToxicity(text: string): Promise<ToxicityResult> {
   }
   
   // Comprehend has a 100KB limit per request
-  const MAX_BYTES = 100000;
   const textBytes = Buffer.byteLength(text, 'utf8');
   
-  if (textBytes > MAX_BYTES) {
+  if (textBytes > SERVICE_LIMITS.COMPREHEND_TOXICITY_MAX_BYTES) {
     // For large texts, chunk and analyze
     logger.info('Text exceeds 100KB, chunking for analysis', { textBytes });
     
-    const chunks = chunkTextByBytes(text, MAX_BYTES);
+    const chunks = chunkTextByBytes(text, SERVICE_LIMITS.COMPREHEND_TOXICITY_MAX_BYTES);
     
     logger.info('Analyzing chunks', { chunkCount: chunks.length });
     
@@ -58,7 +57,7 @@ export async function analyzeToxicity(text: string): Promise<ToxicityResult> {
       Score: score
     }));
     
-    const hasToxicContent = labels.some(label => label.Score > 0.5);
+    const hasToxicContent = labels.some(label => label.Score > THRESHOLDS.TOXICITY_SCORE_THRESHOLD);
     
     logger.info('Toxicity analysis completed (chunked)', { 
       hasToxicContent,
@@ -85,7 +84,7 @@ export async function analyzeToxicity(text: string): Promise<ToxicityResult> {
         Name: label.Name!,
         Score: label.Score!
       }));
-      const hasToxicContent = labels.some(label => label.Score > 0.5);
+      const hasToxicContent = labels.some(label => label.Score > THRESHOLDS.TOXICITY_SCORE_THRESHOLD);
       
       logger.info('Toxicity analysis completed', { 
         hasToxicContent,

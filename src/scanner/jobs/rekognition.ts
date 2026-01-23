@@ -7,6 +7,7 @@ import {
   REKOGNITION_SNS_TOPIC_ARN,
   CALLBACK_TIMEOUT_SECONDS,
   CALLBACK_RETRY_STRATEGY,
+  THRESHOLDS,
   VideoTextData
 } from '../config';
 import { storeCallbackToken } from '../storage/callback-tokens';
@@ -112,7 +113,7 @@ export async function runRekognitionWorkflow(
         const timestamp = detection.Timestamp || 0;
         
         // Filter by confidence threshold
-        if (confidence < 80) continue;
+        if (confidence < THRESHOLDS.REKOGNITION_CONFIDENCE_MIN) continue;
         
         if (text && !seenText.has(text)) {
           seenText.set(text, timestamp);

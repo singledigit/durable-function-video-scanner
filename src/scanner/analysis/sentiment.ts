@@ -1,5 +1,5 @@
 import { DetectSentimentCommand } from '@aws-sdk/client-comprehend';
-import { logger, comprehend, SentimentResult } from '../config';
+import { logger, comprehend, SERVICE_LIMITS, SentimentResult } from '../config';
 import { AnalysisError } from '../errors';
 import { prepareTextForAnalysis } from './utils';
 
@@ -15,8 +15,7 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
   }
   
   // Comprehend sentiment has a 5KB limit
-  const MAX_BYTES = 5000;
-  const prepared = prepareTextForAnalysis(text, MAX_BYTES);
+  const prepared = prepareTextForAnalysis(text, SERVICE_LIMITS.COMPREHEND_SENTIMENT_MAX_BYTES);
   
   try {
     const response = await comprehend.send(new DetectSentimentCommand({

@@ -1,6 +1,6 @@
 import { PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
-import { ddb, SCANNER_TABLE } from '../config';
+import { ddb, SCANNER_TABLE, TIMEOUTS } from '../config';
 
 /**
  * Stores a callback token in DynamoDB for durable function workflows
@@ -26,7 +26,7 @@ export async function storeCallbackToken(
       callbackToken,
       ...metadata,
       createdAt: new Date().toISOString(),
-      ttl: Math.floor(Date.now() / 1000) + 86400 // 24 hours TTL
+      ttl: Math.floor(Date.now() / 1000) + TIMEOUTS.TOKEN_TTL_SECONDS
     })
   }));
 }

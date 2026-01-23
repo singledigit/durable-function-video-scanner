@@ -27,6 +27,27 @@ export const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'global.amazon.n
 export const CALLBACK_TIMEOUT_SECONDS = 1800; // 30 minutes
 export const CALLBACK_RETRY_STRATEGY = () => ({ shouldRetry: false }); // No retries
 
+// Timeout Configuration (in seconds)
+export const TIMEOUTS = {
+  CALLBACK_SECONDS: 1800,                 // 30 minutes for AWS service callbacks
+  APPROVAL_SECONDS: 259200,               // 3 days for human approval
+  TOKEN_TTL_SECONDS: 86400,               // 24 hours for callback tokens
+  APPROVAL_TOKEN_TTL_SECONDS: 259200      // 3 days for approval tokens
+} as const;
+
+// AWS Service Limits (in bytes)
+export const SERVICE_LIMITS = {
+  COMPREHEND_TOXICITY_MAX_BYTES: 100000,  // 100KB
+  COMPREHEND_SENTIMENT_MAX_BYTES: 5000,   // 5KB
+  COMPREHEND_PII_MAX_BYTES: 100000        // 100KB
+} as const;
+
+// Analysis Thresholds
+export const THRESHOLDS = {
+  REKOGNITION_CONFIDENCE_MIN: 80,         // Minimum confidence % for text detection
+  TOXICITY_SCORE_THRESHOLD: 0.5           // Score above this is considered toxic
+} as const;
+
 // Type Definitions
 export interface S3Event {
   detail: {
