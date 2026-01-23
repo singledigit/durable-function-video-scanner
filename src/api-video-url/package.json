@@ -1,0 +1,15 @@
+{
+  "name": "api-video-url",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.709.0",
+    "@aws-sdk/s3-request-presigner": "^3.709.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  }
+}

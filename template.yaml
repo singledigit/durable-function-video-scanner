@@ -408,6 +408,35 @@ Resources:
         EntryPoints:
           - index.ts
 
+  VideoUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/api-video-url/
+      Handler: index.handler
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref ScannerBucket
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ScannerBucket
+      Events:
+        GetVideoUrl:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /video-url
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
 Outputs:
   ApiEndpoint:
     Description: API Gateway endpoint URL

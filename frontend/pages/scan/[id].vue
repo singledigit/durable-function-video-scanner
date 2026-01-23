@@ -44,6 +44,11 @@
             </div>
           </div>
 
+          <!-- Video Player -->
+          <div class="mb-6">
+            <VideoPlayer :video-url="videoUrl" />
+          </div>
+
           <div class="space-y-4">
             <div>
               <h3 class="font-semibold mb-2">Details</h3>
@@ -52,8 +57,8 @@
             </div>
 
             <div v-if="scan.aiSummary">
-              <h3 class="font-semibold mb-2">AI Summary</h3>
-              <p class="text-sm text-gray-700 p-3 bg-gray-50 rounded">{{ scan.aiSummary }}</p>
+              <h3 class="font-semibold mb-2">Summary</h3>
+              <div class="text-sm text-gray-700 p-3 bg-gray-50 rounded prose prose-sm max-w-none" v-html="renderMarkdown(scan.aiSummary.replace(/^###?\s*Executive Summary\s*/i, ''))"></div>
             </div>
 
             <div v-if="scan.reviewedBy">
@@ -85,6 +90,8 @@
 </template>
 
 <script setup lang="ts">
+import { marked } from 'marked';
+
 definePageMeta({ middleware: 'auth' });
 
 const route = useRoute();
@@ -95,12 +102,30 @@ const { getScan, approveScan } = useApi();
 const scanId = route.params.id as string;
 const scan = ref<any>(null);
 const loading = ref(true);
+const videoUrl = ref('');
+
+const config = useRuntimeConfig();
+
+const renderMarkdown = (text: string) => {
+  return marked(text);
+};
 
 const loadScan = async () => {
   loading.value = true;
   try {
     const result = await getScan(scanId);
     scan.value = result.scan;
+    
+    // Get presigned URL for video
+    if (scan.value.objectKey) {
+      const response = await fetch(`${config.public.apiEndpoint}/video-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ objectKey: scan.value.objectKey })
+      });
+      const data = await response.json();
+      videoUrl.value = data.url;
+    }
   } catch (error) {
     console.error('Failed to load scan:', error);
   } finally {

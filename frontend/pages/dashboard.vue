@@ -100,9 +100,29 @@
               @click="viewScan(scan.scanId)"
             >
               <div class="flex justify-between items-start">
-                <div>
+                <div class="flex-1">
                   <h3 class="font-semibold">{{ scan.objectKey.split('/').pop() }}</h3>
                   <p class="text-sm text-gray-600"><ClientOnly>{{ new Date(scan.uploadedAt).toLocaleString() }}</ClientOnly></p>
+                  
+                  <!-- Status Progress Indicator -->
+                  <div class="flex items-center gap-2 mt-2">
+                    <!-- Completed steps as dots -->
+                    <div
+                      v-for="status in getCompletedStatuses(scan)"
+                      :key="status"
+                      :class="getStatusColor(status)"
+                      class="w-2 h-2 rounded-full"
+                      :title="formatStatus(status)"
+                    ></div>
+                    
+                    <!-- Current status as badge -->
+                    <span
+                      :class="getStatusBadgeClass(scan.approvalStatus)"
+                      class="px-2 py-1 rounded text-xs font-medium"
+                    >
+                      {{ formatStatus(scan.approvalStatus) }}
+                    </span>
+                  </div>
                 </div>
                 <span
                   :class="{
@@ -114,19 +134,6 @@
                   class="px-2 py-1 rounded text-xs font-semibold"
                 >
                   {{ scan.overallAssessment }}
-                </span>
-              </div>
-              <div class="mt-2">
-                <span
-                  :class="{
-                    'bg-blue-100 text-blue-800': scan.approvalStatus === 'PENDING_REVIEW',
-                    'bg-green-100 text-green-800': scan.approvalStatus === 'APPROVED',
-                    'bg-red-100 text-red-800': scan.approvalStatus === 'REJECTED',
-                    'bg-gray-100 text-gray-600 animate-pulse': scan.approvalStatus === 'PROCESSING',
-                  }"
-                  class="px-2 py-1 rounded text-xs"
-                >
-                  {{ scan.approvalStatus }}
                 </span>
               </div>
             </div>
@@ -149,6 +156,66 @@ const loading = ref(true);
 const selectedFiles = ref<File[]>([]);
 const uploading = ref(false);
 const isDragging = ref(false);
+
+// Status progression order
+const statusOrder = [
+  'PROCESSING',
+  'SCAN_STARTED',
+  'TRANSCRIPTION_COMPLETED',
+  'REKOGNITION_COMPLETED',
+  'ANALYSIS_COMPLETED',
+  'REPORT_GENERATED',
+  'PENDING_REVIEW',
+  'APPROVED',
+  'REJECTED'
+];
+
+// Format status for display
+const formatStatus = (status: string) => {
+  return status
+    .toLowerCase()
+    .split('_')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
+// Get completed statuses (all before current)
+const getCompletedStatuses = (scan: any) => {
+  const currentIndex = statusOrder.indexOf(scan.approvalStatus);
+  if (currentIndex <= 0) return [];
+  return statusOrder.slice(1, currentIndex); // Skip PROCESSING
+};
+
+// Get color class for status dot
+const getStatusColor = (status: string) => {
+  const colors: Record<string, string> = {
+    'SCAN_STARTED': 'bg-blue-500',
+    'TRANSCRIPTION_COMPLETED': 'bg-purple-500',
+    'REKOGNITION_COMPLETED': 'bg-indigo-500',
+    'ANALYSIS_COMPLETED': 'bg-cyan-500',
+    'REPORT_GENERATED': 'bg-teal-500',
+    'PENDING_REVIEW': 'bg-yellow-500',
+    'APPROVED': 'bg-green-500',
+    'REJECTED': 'bg-red-500'
+  };
+  return colors[status] || 'bg-gray-500';
+};
+
+// Get badge class for current status
+const getStatusBadgeClass = (status: string) => {
+  const classes: Record<string, string> = {
+    'PROCESSING': 'bg-gray-100 text-gray-600 animate-pulse',
+    'SCAN_STARTED': 'bg-blue-100 text-blue-800',
+    'TRANSCRIPTION_COMPLETED': 'bg-purple-100 text-purple-800',
+    'REKOGNITION_COMPLETED': 'bg-indigo-100 text-indigo-800',
+    'ANALYSIS_COMPLETED': 'bg-cyan-100 text-cyan-800',
+    'REPORT_GENERATED': 'bg-teal-100 text-teal-800',
+    'PENDING_REVIEW': 'bg-yellow-100 text-yellow-800',
+    'APPROVED': 'bg-green-100 text-green-800',
+    'REJECTED': 'bg-red-100 text-red-800'
+  };
+  return classes[status] || 'bg-gray-100 text-gray-600';
+};
 
 const loadScans = async () => {
   loading.value = true;

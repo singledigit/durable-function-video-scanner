@@ -106,20 +106,26 @@ const viewDetails = (scanId: string) => {
 
 const approve = async (scanId: string) => {
   try {
+    // Optimistically remove from list
+    pendingScans.value = pendingScans.value.filter(s => s.scanId !== scanId);
     await approveScan(scanId, true, 'Approved by admin');
-    await loadPending();
   } catch (error) {
     console.error('Failed to approve:', error);
+    // Reload on error to restore the scan
+    await loadPending();
   }
 };
 
 const reject = async (scanId: string) => {
   const comments = prompt('Rejection reason (optional):');
   try {
+    // Optimistically remove from list
+    pendingScans.value = pendingScans.value.filter(s => s.scanId !== scanId);
     await approveScan(scanId, false, comments || 'Rejected by admin');
-    await loadPending();
   } catch (error) {
     console.error('Failed to reject:', error);
+    // Reload on error to restore the scan
+    await loadPending();
   }
 };
 
