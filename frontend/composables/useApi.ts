@@ -52,11 +52,44 @@ export const useApi = () => {
     });
   };
 
+  const getProfile = async () => {
+    return apiCall('/profile');
+  };
+
+  const updateProfile = async (profile: { firstName: string; lastName: string; displayName: string }) => {
+    return apiCall('/profile', {
+      method: 'PUT',
+      body: JSON.stringify(profile),
+    });
+  };
+
+  const inviteUser = async (email: string) => {
+    return apiCall('/admin/users/invite', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  };
+
+  const listUsers = async () => {
+    return apiCall('/admin/users');
+  };
+
+  const deleteUser = async (username: string) => {
+    return apiCall(`/admin/users/${username}`, {
+      method: 'DELETE',
+    });
+  };
+
   return {
     uploadVideo,
     listScans,
     getScan,
     listPending,
     approveScan,
+    getProfile,
+    updateProfile,
+    inviteUser,
+    listUsers,
+    deleteUser,
   };
 };

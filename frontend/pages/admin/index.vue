@@ -1,18 +1,6 @@
 <template>
   <div class="min-h-screen bg-gray-50">
-    <nav class="bg-white shadow">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex justify-between h-16">
-          <div class="flex items-center">
-            <h1 class="text-xl font-bold">Admin - Pending Reviews</h1>
-          </div>
-          <div class="flex items-center space-x-4">
-            <NuxtLink to="/dashboard" class="text-blue-600 hover:text-blue-800">Dashboard</NuxtLink>
-            <button @click="handleLogout" class="text-red-600 hover:text-red-800">Logout</button>
-          </div>
-        </div>
-      </div>
-    </nav>
+    <AppNav />
 
     <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
       <div class="px-4 py-6 sm:px-0">
@@ -76,7 +64,7 @@
 <script setup lang="ts">
 definePageMeta({ middleware: 'auth' });
 
-const { user, isAdmin, logout } = useAuth();
+const { isAdmin } = useAuth();
 const { listPending, approveScan } = useApi();
 const router = useRouter();
 
@@ -127,11 +115,6 @@ const reject = async (scanId: string) => {
     // Reload on error to restore the scan
     await loadPending();
   }
-};
-
-const handleLogout = async () => {
-  await logout();
-  router.push('/');
 };
 
 // Listen for realtime scan updates

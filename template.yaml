@@ -2,6 +2,13 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Scanner - Lambda Durable Function triggered by S3 via EventBridge
 
+Parameters:
+  AdminEmail:
+    Type: String
+    Description: Email address for the initial admin user
+    AllowedPattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
+    ConstraintDescription: Must be a valid email address
+
 Globals:
   Function:
     Runtime: nodejs24.x
@@ -23,6 +30,8 @@ Resources:
     Type: AWS::Serverless::Application
     Properties:
       Location: stacks/auth.yaml
+      Parameters:
+        AdminEmail: !Ref AdminEmail
 
   SocketsStack:
     Type: AWS::Serverless::Application
@@ -30,6 +39,29 @@ Resources:
       Location: stacks/sockets.yaml
       Parameters:
         UserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
+
+  # Create admin user using native CloudFormation
+  AdminUser:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
+      Username: !Ref AdminEmail
+      UserAttributes:
+        - Name: email
+          Value: !Ref AdminEmail
+        - Name: email_verified
+          Value: 'true'
+      DesiredDeliveryMediums:
+        - EMAIL
+
+  # Add admin user to Admins group
+  AdminUserGroupAttachment:
+    Type: AWS::Cognito::UserPoolUserToGroupAttachment
+    Properties:
+      UserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
+      Username: !Ref AdminEmail
+      GroupName: Admins
+    DependsOn: AdminUser
 
   # API Gateway for frontend integration
   ScannerApi:
@@ -437,43 +469,119 @@ Resources:
         EntryPoints:
           - index.ts
 
+  ProfileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/api-profile/
+      Handler: index.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ScannerTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ScannerTable
+      Events:
+        GetProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /profile
+            Method: GET
+        UpdateProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /profile
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
+  UsersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/api-users/
+      Handler: index.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !GetAtt AuthStack.Outputs.UserPoolId
+          APPSYNC_EVENTS_API_URL: !Sub 'https://${SocketsStack.Outputs.AppSyncHttpEndpoint}/event'
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminCreateUser
+                - cognito-idp:ListUsers
+                - cognito-idp:AdminDeleteUser
+              Resource: !GetAtt AuthStack.Outputs.UserPoolArn
+            - Effect: Allow
+              Action:
+                - appsync:EventPublish
+              Resource: !Sub 'arn:aws:appsync:${AWS::Region}:${AWS::AccountId}:apis/${SocketsStack.Outputs.AppSyncApiId}/*'
+      Events:
+        InviteUser:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /admin/users/invite
+            Method: POST
+        ListUsers:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /admin/users
+            Method: GET
+        DeleteUser:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /admin/users/{username}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints:
+          - index.ts
+
 Outputs:
   ApiEndpoint:
-    Description: API Gateway endpoint URL
+    Description: NUXT_PUBLIC_API_ENDPOINT
     Value: !Sub 'https://${ScannerApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
   
-  ApprovalEndpoint:
-    Description: Full URL for approval/rejection endpoint
-    Value: !Sub 'https://${ScannerApi}.execute-api.${AWS::Region}.amazonaws.com/prod/approval'
-  
   UserPoolId:
-    Description: Cognito User Pool ID
+    Description: NUXT_PUBLIC_USER_POOL_ID
     Value: !GetAtt AuthStack.Outputs.UserPoolId
   
   UserPoolClientId:
-    Description: Cognito User Pool Client ID
+    Description: NUXT_PUBLIC_USER_POOL_CLIENT_ID
     Value: !GetAtt AuthStack.Outputs.UserPoolClientId
   
   AppSyncHttpEndpoint:
-    Description: AppSync Events HTTP Endpoint
-    Value: !GetAtt SocketsStack.Outputs.AppSyncHttpEndpoint
+    Description: NUXT_PUBLIC_APPSYNC_HTTP_ENDPOINT
+    Value: !Sub 'https://${SocketsStack.Outputs.AppSyncHttpEndpoint}/event'
   
   AppSyncRealtimeEndpoint:
-    Description: AppSync Events Realtime Endpoint
-    Value: !GetAtt SocketsStack.Outputs.AppSyncRealtimeEndpoint
+    Description: NUXT_PUBLIC_APPSYNC_REALTIME_ENDPOINT
+    Value: !Sub 'wss://${SocketsStack.Outputs.AppSyncRealtimeEndpoint}/event/realtime'
   
-  ScannerBucketName:
-    Description: S3 Bucket for uploads
-    Value: !Ref ScannerBucket
+  Region:
+    Description: NUXT_PUBLIC_REGION
+    Value: !Ref AWS::Region
   
-  ScannerFunctionArn:
-    Description: Scanner Function ARN
-    Value: !GetAtt ScannerFunction.Arn
-
-  CallbackFunctionArn:
-    Description: Unified Callback Function ARN
-    Value: !GetAtt CallbackFunction.Arn
-
-  ScannerTableName:
-    Description: DynamoDB table for scanner data
-    Value: !Ref ScannerTable
+  FrontendEnvFile:
+    Description: Copy this to frontend/.env
+    Value: !Sub |
+      NUXT_PUBLIC_API_ENDPOINT=https://${ScannerApi}.execute-api.${AWS::Region}.amazonaws.com/prod
+      NUXT_PUBLIC_USER_POOL_ID=${AuthStack.Outputs.UserPoolId}
+      NUXT_PUBLIC_USER_POOL_CLIENT_ID=${AuthStack.Outputs.UserPoolClientId}
+      NUXT_PUBLIC_APPSYNC_HTTP_ENDPOINT=https://${SocketsStack.Outputs.AppSyncHttpEndpoint}/event
+      NUXT_PUBLIC_APPSYNC_REALTIME_ENDPOINT=wss://${SocketsStack.Outputs.AppSyncRealtimeEndpoint}/event/realtime
+      NUXT_PUBLIC_REGION=${AWS::Region}

@@ -61,6 +61,44 @@
               <div class="text-sm text-gray-700 p-3 bg-gray-50 rounded prose prose-sm max-w-none" v-html="renderMarkdown(scan.aiSummary.replace(/^###?\s*Executive Summary\s*/i, ''))"></div>
             </div>
 
+            <!-- Transcript Section -->
+            <div v-if="fullReport?.transcriptData">
+              <button
+                @click="showTranscript = !showTranscript"
+                class="w-full flex items-center justify-between font-semibold mb-2 p-3 bg-gray-50 rounded hover:bg-gray-100 transition"
+              >
+                <span>Audio Transcript</span>
+                <span class="text-sm text-gray-500">{{ showTranscript ? '▼' : '▶' }}</span>
+              </button>
+              <div v-if="showTranscript" class="p-4 bg-white border border-gray-200 rounded mb-4">
+                <div class="text-sm text-gray-700 whitespace-pre-wrap max-h-96 overflow-y-auto">
+                  {{ fullReport.transcriptData.fullText }}
+                </div>
+                <p class="text-xs text-gray-500 mt-2">
+                  Length: {{ fullReport.transcriptData.fullText.length }} characters
+                </p>
+              </div>
+            </div>
+
+            <!-- Screen Text Section -->
+            <div v-if="fullReport?.videoTextData">
+              <button
+                @click="showScreenText = !showScreenText"
+                class="w-full flex items-center justify-between font-semibold mb-2 p-3 bg-gray-50 rounded hover:bg-gray-100 transition"
+              >
+                <span>Screen Text ({{ fullReport.videoTextData.detectionCount }} detections)</span>
+                <span class="text-sm text-gray-500">{{ showScreenText ? '▼' : '▶' }}</span>
+              </button>
+              <div v-if="showScreenText" class="p-4 bg-white border border-gray-200 rounded mb-4">
+                <div class="text-sm text-gray-700 whitespace-pre-wrap max-h-96 overflow-y-auto">
+                  {{ fullReport.videoTextData.fullText }}
+                </div>
+                <p class="text-xs text-gray-500 mt-2">
+                  Length: {{ fullReport.videoTextData.fullText.length }} characters
+                </p>
+              </div>
+            </div>
+
             <div v-if="scan.reviewedBy">
               <h3 class="font-semibold mb-2">Review Information</h3>
               <p class="text-sm text-gray-600">Reviewed by: {{ scan.reviewedBy }}</p>
@@ -101,8 +139,11 @@ const { getScan, approveScan } = useApi();
 
 const scanId = route.params.id as string;
 const scan = ref<any>(null);
+const fullReport = ref<any>(null);
 const loading = ref(true);
 const videoUrl = ref('');
+const showTranscript = ref(false);
+const showScreenText = ref(false);
 
 const config = useRuntimeConfig();
 
@@ -115,6 +156,7 @@ const loadScan = async () => {
   try {
     const result = await getScan(scanId);
     scan.value = result.scan;
+    fullReport.value = result.fullReport;
     
     // Get presigned URL for video
     if (scan.value.objectKey) {

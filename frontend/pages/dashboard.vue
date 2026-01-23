@@ -1,19 +1,6 @@
 <template>
   <div class="min-h-screen bg-gray-50">
-    <nav class="bg-white shadow">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex justify-between h-16">
-          <div class="flex items-center">
-            <h1 class="text-xl font-bold">Video Scanner</h1>
-          </div>
-          <div class="flex items-center space-x-4">
-            <span class="text-sm text-gray-600"><ClientOnly>{{ user?.username }}</ClientOnly></span>
-            <NuxtLink v-if="isAdmin" to="/admin" class="text-blue-600 hover:text-blue-800">Admin</NuxtLink>
-            <button @click="handleLogout" class="text-red-600 hover:text-red-800">Logout</button>
-          </div>
-        </div>
-      </div>
-    </nav>
+    <AppNav />
 
     <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
       <div class="px-4 py-6 sm:px-0">
@@ -96,10 +83,9 @@
             <div
               v-for="scan in scans"
               :key="scan.scanId"
-              class="bg-white p-4 rounded-lg shadow cursor-pointer hover:shadow-lg transition"
-              @click="viewScan(scan.scanId)"
+              class="bg-white p-4 rounded-lg shadow hover:shadow-lg transition"
             >
-              <div class="flex justify-between items-start">
+              <div class="flex justify-between items-start mb-4">
                 <div class="flex-1">
                   <h3 class="font-semibold">{{ scan.objectKey.split('/').pop() }}</h3>
                   <p class="text-sm text-gray-600"><ClientOnly>{{ new Date(scan.uploadedAt).toLocaleString() }}</ClientOnly></p>
@@ -136,6 +122,15 @@
                   {{ scan.overallAssessment }}
                 </span>
               </div>
+
+              <div class="flex gap-2">
+                <button
+                  @click="viewScan(scan.scanId)"
+                  class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  View Details
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -147,15 +142,17 @@
 <script setup lang="ts">
 definePageMeta({ middleware: 'auth' });
 
-const { user, isAdmin, logout } = useAuth();
 const { uploadVideo, listScans } = useApi();
-const router = useRouter();
 
 const scans = ref<any[]>([]);
 const loading = ref(true);
 const selectedFiles = ref<File[]>([]);
 const uploading = ref(false);
 const isDragging = ref(false);
+
+onMounted(async () => {
+  await loadScans();
+});
 
 // Status progression order
 const statusOrder = [
@@ -288,12 +285,7 @@ const uploadFiles = async () => {
 };
 
 const viewScan = (scanId: string) => {
-  router.push(`/scan/${scanId}`);
-};
-
-const handleLogout = async () => {
-  await logout();
-  router.push('/');
+  navigateTo(`/scan/${scanId}`);
 };
 
 // Listen for realtime scan updates

@@ -2,6 +2,11 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Authentication Stack - Cognito User Pool
 
+Parameters:
+  AdminEmail:
+    Type: String
+    Description: Email address for the initial admin user
+
 Resources:
   UserPool:
     Type: AWS::Cognito::UserPool
@@ -11,6 +16,8 @@ Resources:
         - email
       UsernameAttributes:
         - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true  # Invite-only
       Schema:
         - Name: email
           AttributeDataType: String

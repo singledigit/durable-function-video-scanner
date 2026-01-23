@@ -42,6 +42,43 @@ export const useAuth = () => {
         onFailure: (err) => {
           reject(err);
         },
+        newPasswordRequired: (userAttributes, requiredAttributes) => {
+          // Return cognitoUser so caller can complete password change
+          resolve({ 
+            challengeName: 'NEW_PASSWORD_REQUIRED',
+            cognitoUser,
+            userAttributes,
+            requiredAttributes
+          });
+        },
+      });
+    });
+  };
+
+  const completeNewPassword = async (cognitoUser: any, newPassword: string, userAttributes: any) => {
+    return new Promise((resolve, reject) => {
+      // Remove attributes that can't be updated
+      delete userAttributes.email_verified;
+      delete userAttributes.email;
+      
+      cognitoUser.completeNewPasswordChallenge(newPassword, userAttributes, {
+        onSuccess: async (result: any) => {
+          const groups = result.getIdToken().payload['cognito:groups'] || [];
+          user.value = {
+            username: cognitoUser.getUsername(),
+            groups,
+          };
+          
+          if (process.client) {
+            const { connect } = useRealtimeUpdates();
+            await connect();
+          }
+          
+          resolve(result);
+        },
+        onFailure: (err: any) => {
+          reject(err);
+        },
       });
     });
   };
@@ -146,6 +183,7 @@ export const useAuth = () => {
     isAuthenticated,
     isAdmin,
     login,
+    completeNewPassword,
     register,
     confirm,
     logout,
