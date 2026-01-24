@@ -2,7 +2,7 @@ import { SignatureV4 } from '@smithy/signature-v4';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { HttpRequest } from '@smithy/protocol-http';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
-import { APPSYNC_EVENTS_API_URL, AWS_REGION } from '../config';
+import { logger, APPSYNC_EVENTS_API_URL, AWS_REGION } from '../config';
 
 interface EventData {
   type: string;
@@ -17,7 +17,7 @@ interface EventData {
  */
 export async function publishEvent(event: EventData): Promise<void> {
   if (!APPSYNC_EVENTS_API_URL) {
-    console.warn('APPSYNC_EVENTS_API_URL not configured, skipping event publish');
+    logger.warn('APPSYNC_EVENTS_API_URL not configured, skipping event publish');
     return;
   }
 
@@ -43,7 +43,7 @@ export async function publishEvent(event: EventData): Promise<void> {
         events: [JSON.stringify(event)],
       });
       
-      console.log('Publishing to channel:', channel);
+      logger.info('Publishing event to channel', { channel, eventType: event.type, scanId: event.scanId });
 
       const request = new HttpRequest({
         hostname: url.hostname,
@@ -73,14 +73,27 @@ export async function publishEvent(event: EventData): Promise<void> {
 
       if (!response.ok) {
         const error = await response.text();
-        console.error(`Failed to publish to ${channel}:`, error);
+        logger.error('Failed to publish event to channel', { 
+          channel, 
+          eventType: event.type,
+          status: response.status,
+          error 
+        });
         throw new Error(`AppSync Events publish failed: ${response.status}`);
       }
 
-      console.log(`Published ${event.type} to ${channel}`);
+      logger.info('Successfully published event', { 
+        channel, 
+        eventType: event.type, 
+        scanId: event.scanId 
+      });
     }
   } catch (error) {
-    console.error('Error publishing event:', error);
+    logger.error('Error publishing event', {
+      error: error instanceof Error ? error.message : String(error),
+      eventType: event.type,
+      scanId: event.scanId
+    });
     // Don't throw - allow workflow to continue even if event publishing fails
   }
 }

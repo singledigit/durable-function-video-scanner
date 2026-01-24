@@ -1,152 +1,210 @@
 # Video Scanner - Content Analysis Pipeline
 
-A serverless video content analysis pipeline built with AWS Lambda Durable Functions, Amazon Transcribe, and Amazon Comprehend.
+A serverless video content analysis pipeline built with AWS Lambda Durable Functions, demonstrating advanced orchestration patterns for long-running workflows with human-in-the-loop approval.
 
 ## Overview
 
-This application automatically processes video files uploaded to S3, transcribes the audio, and performs comprehensive content analysis including toxicity detection, sentiment analysis, and PII detection.
+This application automatically processes video files uploaded to S3, performing comprehensive content analysis through a multi-step durable workflow that can run for days while maintaining state. It demonstrates key durable function patterns including parallel execution, async callbacks, and human approval workflows.
 
 ## Architecture
 
-The system uses AWS Lambda Durable Functions to orchestrate a multi-step workflow that can run for extended periods while maintaining state and handling failures gracefully.
+The system uses AWS Lambda Durable Functions to orchestrate a multi-step workflow that can run for up to 7 days while maintaining state and handling failures gracefully. The workflow demonstrates key patterns: parallel execution with child contexts, async callbacks for AWS service jobs, and human-in-the-loop approval with timeout handling.
 
-### Workflow Diagram
+### Complete Workflow Diagram
 
 ```mermaid
-graph TD
-    A[Video Uploaded to S3] -->|EventBridge| B[Scanner Function Starts]
-    B --> PARALLEL1[Steps 1-4: Parallel Execution]
+graph TB
+    START[Video Upload to S3] -->|EventBridge Rule| INIT[Scanner Function Invoked]
     
-    PARALLEL1 --> C1[Branch 1: Transcription]
-    PARALLEL1 --> C2[Branch 2: Rekognition]
+    INIT --> STEP0[Step 0: Generate Scan ID]
+    STEP0 --> EVENT1[Publish: SCAN_STARTED]
     
-    C1 --> D1[Step 1: Start Transcription]
-    D1 -->|Store Token| DB1[DynamoDB: Callback Tokens]
-    D1 -->|Start Job| E1[Amazon Transcribe]
-    D1 -->|waitForCallback| F1[Function Suspends]
+    EVENT1 --> PARALLEL1{Parallel Execution<br/>Steps 1-4}
     
-    E1 -->|Job Complete| G1[EventBridge Event]
-    G1 --> H1[Callback Function]
-    H1 -->|Get Token| DB1
-    H1 -->|Send Callback| I1[Resume Branch 1]
+    PARALLEL1 -->|Branch 1| TRANS1[Step 1: Start Transcription]
+    PARALLEL1 -->|Branch 2| REK1[Step 3: Start Rekognition]
     
-    I1 --> J1[Step 2: Fetch Transcript]
-    J1 -->|Get Object| K1[S3 Transcript JSON]
-    K1 --> L1[Extract Full Text]
+    TRANS1 -->|Setup Function| TRANS1A[Store Callback Token<br/>DynamoDB TTL: 24h]
+    TRANS1A --> TRANS1B[Start Transcribe Job<br/>Job Name: transcribe-timestamp-scanId]
+    TRANS1B --> TRANS1C[waitForCallback<br/>Timeout: 30 min]
+    TRANS1C -->|Function Suspends| WAIT1[⏸️ Waiting]
     
-    C2 --> D2[Step 3: Start Rekognition]
-    D2 -->|Store Token| DB2[DynamoDB: Callback Tokens]
-    D2 -->|Start Job| E2[Amazon Rekognition]
-    D2 -->|waitForCallback| F2[Function Suspends]
+    WAIT1 -->|Job Complete| EB1[EventBridge:<br/>Transcribe Job State Change]
+    EB1 --> CB1[Callback Function]
+    CB1 --> CB1A[Query DynamoDB<br/>Get Callback Token]
+    CB1A --> CB1B[SendDurableExecutionCallbackSuccess]
+    CB1B --> RESUME1[✅ Branch 1 Resumes]
     
-    E2 -->|Job Complete| G2[SNS Notification]
-    G2 --> H2[Callback Function]
-    H2 -->|Get Token| DB2
-    H2 -->|Send Callback| I2[Resume Branch 2]
+    RESUME1 --> TRANS2[Step 2: Fetch Transcript]
+    TRANS2 --> TRANS2A[GetTranscriptionJob API]
+    TRANS2A --> TRANS2B[Parse Transcript URI]
+    TRANS2B --> TRANS2C[Fetch JSON from S3]
+    TRANS2C --> TRANS2D[Extract Full Text + Timestamps]
     
-    I2 --> J2[Step 4: Fetch Video Text]
-    J2 --> K2[Extract Text Detections]
+    REK1 -->|Setup Function| REK1A[Store Callback Token<br/>DynamoDB TTL: 24h]
+    REK1A --> REK1B[Start Rekognition Job<br/>Job Name: rekognition-timestamp-scanId]
+    REK1B --> REK1C[waitForCallback<br/>Timeout: 30 min]
+    REK1C -->|Function Suspends| WAIT2[⏸️ Waiting]
     
-    L1 --> MERGE1[Merge Results]
-    K2 --> MERGE1
+    WAIT2 -->|Job Complete| SNS1[SNS Topic:<br/>Rekognition Notification]
+    SNS1 --> CB2[Callback Function]
+    CB2 --> CB2A[Query DynamoDB<br/>Get Callback Token]
+    CB2A --> CB2B[SendDurableExecutionCallbackSuccess]
+    CB2B --> RESUME2[✅ Branch 2 Resumes]
     
-    MERGE1 --> U[Step 5: Build Combined Corpus]
-    U --> V[Map Audio + Screen Text]
+    RESUME2 --> REK2[Step 4: Fetch Video Text]
+    REK2 --> REK2A[GetTextDetection API<br/>Handle Pagination]
+    REK2A --> REK2B[Filter by Confidence >80%]
+    REK2B --> REK2C[Deduplicate Text Across Frames]
+    REK2C --> REK2D[Extract Text + Timestamps + Bounding Boxes]
     
-    V --> W[Step 6: Parallel Analysis]
-    W --> X[Branch 1: Toxicity]
-    W --> Y[Branch 2: Sentiment]
-    W --> Z[Branch 3: PII]
+    TRANS2D --> MERGE1[Parallel Results Merge]
+    REK2D --> MERGE1
     
-    X -->|Amazon Comprehend| AA[Toxicity Results]
-    Y -->|Amazon Comprehend| AB[Sentiment Results]
-    Z -->|Amazon Comprehend| AC[PII Results]
+    MERGE1 --> EVENT2[Publish: TRANSCRIPTION_COMPLETED]
+    EVENT2 --> EVENT3[Publish: REKOGNITION_COMPLETED]
     
-    AA --> MERGE2[Merge Analysis]
-    AB --> MERGE2
-    AC --> MERGE2
+    EVENT3 --> STEP5[Step 5: Build Combined Corpus]
+    STEP5 --> STEP5A[Combine Audio + Screen Text]
+    STEP5A --> STEP5B[Create Position Index<br/>Map Each Word to Source]
+    STEP5B --> STEP5C[Preserve Timestamps]
     
-    MERGE2 --> AD[Step 7: Map to Sources]
-    AD --> AE[Audio vs Screen Breakdown]
+    STEP5C --> PARALLEL2{Parallel Analysis<br/>Step 6}
     
-    AE --> AF[Step 8: AI Summary]
-    AF -->|Amazon Bedrock| AG[Nova Lite Model]
-    AG --> AH[Executive Summary]
+    PARALLEL2 --> TOX[Toxicity Detection]
+    PARALLEL2 --> SENT[Sentiment Analysis]
+    PARALLEL2 --> PII[PII Detection]
     
-    AH --> AI[Step 9: Save Results]
-    AI -->|Write JSON| AJ[S3: reports/scanId.json]
-    AI -->|Write HTML| AK[S3: reports/scanId.html]
-    AI -->|Write Metadata| AL[DynamoDB: ScanResults]
-    AL -->|Status: PENDING_REVIEW| AN
+    TOX --> TOX1[Comprehend DetectToxicContent]
+    TOX1 --> TOX2[7 Categories:<br/>Profanity, Hate Speech, Insult,<br/>Graphic, Harassment, Sexual, Violence]
+    TOX2 --> TOX3[Auto-chunk if >100KB]
     
-    AN[Step 10: Wait for Approval] -->|Store Token| AO[DynamoDB: Callback Tokens]
-    AN -->|waitForCallback| AP[Function Suspends - 3 Days]
+    SENT --> SENT1[Comprehend DetectSentiment]
+    SENT1 --> SENT2[Returns: POSITIVE, NEGATIVE,<br/>NEUTRAL, MIXED]
+    SENT2 --> SENT3[Analyze first 5KB]
     
-    AP -->|Human Decision| AQ[Callback Function]
-    AP -->|Timeout 3 Days| AR[Auto-Reject]
+    PII --> PII1[Comprehend DetectPiiEntities]
+    PII1 --> PII2[Detects: Names, Emails, SSN,<br/>Credit Cards, Addresses, etc.]
+    PII2 --> PII3[Analyze first 100KB]
     
-    AQ -->|Get Token| AO
-    AQ -->|Send Callback| AS[Resume Function]
-    AR --> AS
+    TOX3 --> MERGE2[Analysis Results Merge]
+    SENT3 --> MERGE2
+    PII3 --> MERGE2
     
-    AS --> AT[Step 11: Update Approval Status]
-    AT -->|Update Status| AU[DynamoDB: APPROVED/REJECTED]
+    MERGE2 --> EVENT4[Publish: ANALYSIS_COMPLETED]
     
-    AU --> AV[Return Final Result]
+    EVENT4 --> STEP7[Step 7: Map to Sources]
+    STEP7 --> STEP7A[Use Position Index]
+    STEP7A --> STEP7B[Identify PII Source:<br/>Audio vs Screen]
+    STEP7B --> STEP7C[Create Source Breakdown]
     
-    style B fill:#ff9900
-    style PARALLEL1 fill:#4caf50
-    style C1 fill:#2196f3
-    style C2 fill:#2196f3
-    style F1 fill:#ffeb3b
-    style F2 fill:#ffeb3b
-    style I1 fill:#ff9900
-    style I2 fill:#ff9900
-    style MERGE1 fill:#4caf50
-    style W fill:#4caf50
-    style X fill:#2196f3
-    style Y fill:#2196f3
-    style Z fill:#2196f3
-    style MERGE2 fill:#4caf50
-    style AF fill:#9c27b0
-    style AI fill:#4caf50
-    style AP fill:#ffeb3b
-    style AS fill:#ff9900
-    style AT fill:#4caf50
-    style AV fill:#4caf50
+    STEP7C --> STEP8[Step 8: Generate AI Summary]
+    STEP8 --> STEP8A[Build Structured Prompt]
+    STEP8A --> STEP8B[Bedrock Nova Lite<br/>global.amazon.nova-2-lite-v1:0]
+    STEP8B --> STEP8C[3-4 Sentence Summary]
+    STEP8C --> STEP8D[Safety Assessment:<br/>SAFE / CAUTION / UNSAFE]
+    
+    STEP8D --> STEP9[Step 9: Save Results]
+    STEP9 --> STEP9A[Generate scanId UUID]
+    STEP9A --> STEP9B[Determine Overall Assessment]
+    STEP9B --> STEP9C[Save JSON Report to S3<br/>reports/scanId.json]
+    STEP9C --> STEP9D[Save Metadata to DynamoDB]
+    STEP9D --> STEP9E[Set Status: PENDING_REVIEW<br/>GSI1: USER#userId<br/>GSI2: STATUS#PENDING_REVIEW]
+    
+    STEP9E --> EVENT5[Publish: REPORT_GENERATED]
+    EVENT5 --> EVENT6[Publish: PENDING_REVIEW]
+    
+    EVENT6 --> STEP10[Step 10: Wait for Approval]
+    STEP10 --> STEP10A[Store Callback Token<br/>DynamoDB TTL: 3 days]
+    STEP10A --> STEP10B[waitForCallback<br/>Timeout: 3 days]
+    STEP10B -->|Function Suspends| WAIT3[⏸️ Waiting<br/>Up to 3 Days]
+    
+    WAIT3 -->|Human Approves/Rejects| API[POST /approval<br/>Callback Function]
+    WAIT3 -->|3 Day Timeout| TIMEOUT[Auto-Reject]
+    
+    API --> CB3[Query DynamoDB<br/>Get Callback Token]
+    CB3 --> CB3A[SendDurableExecutionCallbackSuccess<br/>Pass Approval Decision]
+    CB3A --> RESUME3[✅ Function Resumes]
+    
+    TIMEOUT --> TIMEOUT1[Return Auto-Reject Result<br/>reviewedBy: system]
+    TIMEOUT1 --> RESUME3
+    
+    RESUME3 --> STEP11[Step 11: Update Approval Status]
+    STEP11 --> STEP11A[Update DynamoDB Record]
+    STEP11A --> STEP11B[Set approvalStatus:<br/>APPROVED or REJECTED]
+    STEP11B --> STEP11C[Update GSI2:<br/>STATUS#APPROVED or STATUS#REJECTED]
+    STEP11C --> STEP11D[Add reviewedBy, reviewedAt, comments]
+    
+    STEP11D --> EVENT7[Publish: APPROVED or REJECTED]
+    
+    EVENT7 --> FINAL[Return Final Result]
+    FINAL --> END[✅ Workflow Complete]
+    
+    style INIT fill:#ff9900,stroke:#333,stroke-width:2px
+    style PARALLEL1 fill:#4caf50,stroke:#333,stroke-width:2px
+    style PARALLEL2 fill:#4caf50,stroke:#333,stroke-width:2px
+    style WAIT1 fill:#ffeb3b,stroke:#333,stroke-width:2px
+    style WAIT2 fill:#ffeb3b,stroke:#333,stroke-width:2px
+    style WAIT3 fill:#ffeb3b,stroke:#333,stroke-width:2px
+    style RESUME1 fill:#ff9900,stroke:#333,stroke-width:2px
+    style RESUME2 fill:#ff9900,stroke:#333,stroke-width:2px
+    style RESUME3 fill:#ff9900,stroke:#333,stroke-width:2px
+    style STEP8B fill:#9c27b0,stroke:#333,stroke-width:2px
+    style END fill:#4caf50,stroke:#333,stroke-width:2px
 ```
 
 **Legend:**
-- 🟠 Orange: Durable Function Execution
-- 🟡 Yellow: Function Suspended (No Compute Charges)
+- 🟠 Orange: Active Durable Function Execution
+- 🟡 Yellow: Function Suspended
 - 🟢 Green: Parallel Execution / Completion
-- 🔵 Blue: Concurrent Analysis Branches
-- 🟣 Purple: AI Processing
+- 🟣 Purple: AI Processing (Bedrock)
+- ⏸️ Suspension Points: Function pauses, state saved
 
 ### Components
 
-- **Scanner Function** (Durable): Main orchestrator that coordinates the entire workflow
-- **Callback Function**: Unified handler that processes callbacks from three sources:
+- **Scanner Function** (Durable): Main orchestrator implementing the complete 11-step workflow with parallel execution and human approval
+- **Callback Function**: Unified handler processing callbacks from three sources:
   - EventBridge events (Transcribe job completion)
-  - SNS notifications (Rekognition job completion)
-  - Direct invocation (Human approval decisions)
-- **S3 Bucket**: Stores uploaded videos, transcripts, and scan reports
-- **DynamoDB Tables**: 
-  - Callback tokens for durable execution (with TTL)
-  - Scan results with user-based and approval status indexes
-- **EventBridge**: Routes S3 object creation and Transcribe completion events
-- **SNS Topic**: Routes Rekognition completion notifications
+  - SNS notifications (Rekognition job completion)  
+  - API Gateway (Human approval/rejection decisions)
+- **API Functions**:
+  - **api-scans**: Handles scan operations (list, get, upload URLs, video URLs, pending reviews)
+  - **api-users**: Manages user profiles and admin user operations
+- **S3 Bucket**: Stores uploaded videos (`raw/{userId}/`), transcripts, and scan reports (`reports/`)
+- **DynamoDB Table**: Single table design with:
+  - Callback tokens (with TTL: 24h for jobs, 3 days for approval)
+  - Scan results with GSI1 (user-based queries) and GSI2 (approval status queries)
+- **EventBridge Rules**: 
+  - S3 object creation events (triggers scanner)
+  - Transcribe job completion events (triggers callback)
+- **SNS Topic**: Rekognition job completion notifications
+- **AppSync Events API**: Real-time event publishing for frontend updates
+- **Cognito User Pool**: Authentication and authorization
 
 ## Durable Function Workflow
 
-The Scanner function implements a fault-tolerant, multi-step workflow using AWS Lambda Durable Functions with proper child context handling for deterministic replay.
+The Scanner function implements a fault-tolerant, 11-step workflow using AWS Lambda Durable Functions. Each step is automatically checkpointed, enabling recovery from any point and allowing the workflow to run for up to 7 days.
 
-### Steps 1-4: Parallel Transcription and Rekognition (with Child Contexts)
+### Step 0: Generate Scan ID
+```typescript
+const { scanId, uploadedAt } = await context.step('generate-scan-id', async () => ({
+  scanId: uuidv4(),
+  uploadedAt: new Date().toISOString(),
+}));
+```
 
-The first major optimization is running transcription and video text detection in parallel, reducing total wait time by ~50%. Each parallel branch uses its own child context for deterministic replay:
+**What happens:**
+- Generates unique scanId (UUID) for tracking
+- Captures upload timestamp
+- Uses `context.step()` to ensure deterministic replay - same scanId on retries
+- Publishes SCAN_STARTED event to AppSync for real-time updates
+
+### Steps 1-4: Parallel Transcription and Rekognition
+
+The first major optimization runs transcription and video text detection in parallel, reducing total wait time by ~50%. Each parallel branch uses its own child context for deterministic replay.
 
 ```typescript
-context.parallel([
+const parallelResults = await context.parallel([
   // Branch 1: Transcription workflow
   async (childContext) => {
     const transcriptionResult = await childContext.waitForCallback(...)
@@ -154,7 +212,7 @@ context.parallel([
     return transcriptData;
   },
   
-  // Branch 2: Rekognition workflow
+  // Branch 2: Rekognition workflow  
   async (childContext) => {
     const rekognitionResult = await childContext.waitForCallback(...)
     const videoTextData = await childContext.step(...)
@@ -166,38 +224,60 @@ context.parallel([
 **Why Child Contexts Matter:**
 - Each parallel branch receives its own `childContext` parameter
 - All operations within a branch must use the child context (not the parent context)
-- This ensures deterministic replay when operations execute in different orders
+- Ensures deterministic replay when operations execute in different orders
 - Follows AWS Durable Execution SDK best practices
 
 #### Branch 1: Transcription Workflow
 
 **Step 1: Start Transcription Job**
-```
-childContext.waitForCallback('transcription-result', async (callbackToken) => {
-  // Store callback token in DynamoDB
-  // Start Amazon Transcribe job
-  // Job completion triggers callback via EventBridge
-})
+```typescript
+const transcriptionResult = await childContext.waitForCallback<string>(
+  'transcription-result',
+  async (callbackToken: string) => {
+    // Setup function - idempotent, not deterministic
+    await storeCallbackToken(scanId, jobName, callbackToken);
+    await transcribe.send(new StartTranscriptionJobCommand({
+      TranscriptionJobName: `transcribe-${Date.now()}-${scanId}`,
+      // ... configuration
+    }));
+  },
+  { timeout: { seconds: 1800 }, retryStrategy: CALLBACK_RETRY_STRATEGY }
+);
 ```
 
 **What happens:**
 - Receives S3 object created event for videos in `raw/{userId}/` prefix
-- Generates unique transcription job name
+- Generates unique job name with timestamp: `transcribe-${Date.now()}-${scanId}`
 - Stores callback token in DynamoDB with 24-hour TTL
 - Starts Amazon Transcribe job with job name as correlation ID
 - Function suspends (no compute charges) while waiting for transcription
-- Transcribe completion event triggers callback function
-- Callback function sends result back to durable execution
-- Function resumes with transcription result
+- Transcribe completion event triggers callback function via EventBridge
+- Callback function queries DynamoDB for token, sends result to durable execution
+- Function resumes with transcription job name
+
+**Setup Function Pattern:**
+- Setup functions are **idempotent, not deterministic**
+- Non-deterministic code (`Date.now()`, `uuidv4()`) is acceptable and often desired
+- If callback hasn't been received, setup runs again on replay - this is by design
+- Unique identifiers in job names prevent conflicts and allow safe retries
 
 **Step 2: Fetch Transcript from S3**
-```
-childContext.step('fetch-transcript', async () => {
-  // Fetch full transcription job details from Transcribe
+```typescript
+const transcriptData = await childContext.step('fetch-transcript', async () => {
+  // Fetch complete job details
+  const job = await transcribe.send(new GetTranscriptionJobCommand({
+    TranscriptionJobName: transcriptionResult
+  }));
+  
   // Parse transcript URI (supports s3:// and https:// formats)
+  const transcriptUri = job.TranscriptionJob?.Transcript?.TranscriptFileUri;
+  
   // Fetch transcript JSON from S3
+  const transcriptJson = await s3.send(new GetObjectCommand({ ... }));
+  
   // Extract full text and word-level timestamps
-})
+  return { fullText, transcriptUri, transcriptionResult };
+});
 ```
 
 **What happens:**
@@ -207,34 +287,67 @@ childContext.step('fetch-transcript', async () => {
 - Fetches the transcript JSON file from S3
 - Extracts the full transcript text with timestamps
 - Returns text and metadata for next step
+- Publishes TRANSCRIPTION_COMPLETED event
 
 #### Branch 2: Rekognition Workflow
 
 **Step 3: Start Rekognition Text Detection**
-```
-childContext.waitForCallback('rekognition-result', async (callbackToken) => {
-  // Store callback token in DynamoDB
-  // Start Amazon Rekognition text detection job
-  // Job completion triggers callback via SNS
-})
+```typescript
+const rekognitionResult = await childContext.waitForCallback<string>(
+  'rekognition-result',
+  async (callbackToken: string) => {
+    // Setup function - idempotent, not deterministic
+    await storeCallbackToken(scanId, jobName, callbackToken);
+    await rekognition.send(new StartTextDetectionCommand({
+      Video: { S3Object: { Bucket, Name } },
+      NotificationChannel: {
+        SNSTopicArn: REKOGNITION_SNS_TOPIC_ARN,
+        RoleArn: REKOGNITION_ROLE_ARN
+      },
+      JobTag: `rekognition-${Date.now()}-${scanId}`
+    }));
+  },
+  { timeout: { seconds: 1800 }, retryStrategy: CALLBACK_RETRY_STRATEGY }
+);
 ```
 
 **What happens:**
-- Stores callback token in DynamoDB
+- Stores callback token in DynamoDB with 24-hour TTL
 - Starts Rekognition text detection job on video
 - Configures SNS notification channel for job completion
 - Function suspends while waiting for text detection
 - Rekognition publishes to SNS when complete
 - SNS triggers callback function
 - Function resumes with job ID
+- Gracefully handles failures - continues with audio-only analysis
 
 **Step 4: Fetch Video Text Detections**
-```
-childContext.step('fetch-video-text', async () => {
-  // Fetch all text detection results
-  // Deduplicate and filter by confidence
-  // Extract text with timestamps and bounding boxes
-})
+```typescript
+const videoTextData = await childContext.step('fetch-video-text', async () => {
+  // Fetch all text detection results with pagination
+  let nextToken: string | undefined;
+  const allDetections: TextDetection[] = [];
+  
+  do {
+    const response = await rekognition.send(new GetTextDetectionCommand({
+      JobId: rekognitionResult,
+      NextToken: nextToken
+    }));
+    allDetections.push(...(response.TextDetections || []));
+    nextToken = response.NextToken;
+  } while (nextToken);
+  
+  // Filter by confidence >80% and deduplicate
+  const uniqueTexts = new Map<string, TextSegment>();
+  for (const detection of allDetections) {
+    if (detection.TextDetection?.Confidence && 
+        detection.TextDetection.Confidence > 80) {
+      // Deduplicate and store with timestamp
+    }
+  }
+  
+  return { textSegments, fullText, detectionCount };
+});
 ```
 
 **What happens:**
@@ -242,95 +355,111 @@ childContext.step('fetch-video-text', async () => {
 - Handles pagination for large result sets
 - Filters detections by confidence threshold (>80%)
 - Deduplicates text across frames
-- Returns unique text segments with timestamps
+- Returns unique text segments with timestamps and bounding boxes
+- Publishes REKOGNITION_COMPLETED event
 
 **Parallel Execution Benefits:**
 - Both workflows run concurrently instead of sequentially
 - Total wait time reduced by approximately 50%
 - Results merge before corpus building (Step 5)
-- Maintains error handling for Rekognition failures
+- Maintains error handling for Rekognition failures (continues with audio-only)
 
 ### Step 5: Build Combined Corpus
-```
-context.step('build-corpus', async () => {
-  // Combine audio transcript and screen text
-  // Create position index mapping text to source
-  // Track timestamps for both audio and screen
-})
+```typescript
+const corpusData = await context.step('build-corpus', async () => {
+  // Combine audio transcript words with video text detections
+  const combinedText = transcriptData.fullText + '\n\n' + (videoTextData?.fullText || '');
+  
+  // Create position index mapping each character to its source
+  const positionIndex: Array<'audio' | 'screen'> = [];
+  // ... map each character position to audio or screen
+  
+  return { combinedText, positionIndex };
+});
 ```
 
 **What happens:**
 - Combines transcript words with video text detections
-- Creates position index mapping each word to its source (audio/screen)
+- Creates position index mapping each character to its source (audio/screen)
 - Preserves timestamps for temporal analysis
-- Enables source-level issue tracking
+- Enables source-level issue tracking in later steps
 
-### Step 6: Parallel Content Analysis (with Child Contexts)
-```
-context.parallel([
-  async (childContext) => { /* Toxicity Detection */ },
-  async (childContext) => { /* Sentiment Analysis */ },
-  async (childContext) => { /* PII Detection */ }
-])
+### Step 6: Parallel Content Analysis
+```typescript
+const analysisResults = await context.parallel([
+  async () => analyzeToxicity(corpusData.combinedText),
+  async () => analyzeSentiment(corpusData.combinedText),
+  async () => detectPII(corpusData.combinedText)
+]);
 ```
 
 **What happens:**
-All three analyses run concurrently on the combined corpus using Amazon Comprehend. Each branch uses its own child context for proper deterministic replay:
+All three analyses run concurrently on the combined corpus using Amazon Comprehend. Unlike Steps 1-4, these don't need child contexts because they don't use `waitForCallback()`.
 
-#### Branch 1: Toxicity Detection
+#### Toxicity Detection
 - Detects 7 types of toxic content:
-  - PROFANITY
-  - HATE_SPEECH
-  - INSULT
-  - GRAPHIC
-  - HARASSMENT_OR_ABUSE
-  - SEXUAL
-  - VIOLENCE_OR_THREAT
+  - PROFANITY, HATE_SPEECH, INSULT, GRAPHIC
+  - HARASSMENT_OR_ABUSE, SEXUAL, VIOLENCE_OR_THREAT
 - Handles large texts by chunking (100KB limit per request)
 - Returns confidence scores for each category
 - Flags content as toxic if any score > 0.5
 
-#### Branch 2: Sentiment Analysis
+#### Sentiment Analysis
 - Analyzes overall emotional tone
 - Returns sentiment: POSITIVE, NEGATIVE, NEUTRAL, or MIXED
 - Provides confidence scores for each sentiment type
 - Analyzes first 5KB if text exceeds limit
 
-#### Branch 3: PII Detection
+#### PII Detection
 - Detects personally identifiable information:
-  - Names
-  - Phone numbers
-  - Email addresses
-  - Credit card numbers
-  - SSNs
-  - Addresses
+  - Names, Phone numbers, Email addresses
+  - Credit card numbers, SSNs, Addresses
   - And more
 - Groups entities by type for easy summary
 - Returns count, types, and locations of all PII found
 - Analyzes first 100KB if text exceeds limit
 
+**Publishes ANALYSIS_COMPLETED event after all three complete**
+
 ### Step 7: Map Results to Sources
-```
-context.step('map-to-sources', async () => {
-  // Map PII entities back to audio or screen source
-  // Create breakdown by source type
-  // Enable targeted remediation
-})
+```typescript
+const mappedResults = await context.step('map-to-sources', async () => {
+  // Map each PII entity back to audio or screen source
+  const piiBySource = { audio: [], screen: [] };
+  
+  for (const entity of piiResults.entities) {
+    const source = positionIndex[entity.BeginOffset];
+    piiBySource[source].push(entity);
+  }
+  
+  return { pii: piiBySource, summary: { audio: {...}, screen: {...} } };
+});
 ```
 
 **What happens:**
 - Maps each detected PII entity to its source (audio/screen)
-- Uses position index to determine origin
+- Uses position index from Step 5 to determine origin
 - Creates summary showing issues per source
 - Enables targeted content moderation
 
 ### Step 8: Generate AI Summary
-```
-context.step('generate-summary', async () => {
-  // Build structured prompt with all analysis results
-  // Call Amazon Bedrock Nova Lite model
-  // Generate executive summary with recommendations
-})
+```typescript
+const aiSummary = await context.step('generate-summary', async () => {
+  // Build structured prompt with all findings
+  const prompt = `Analyze this video content scan...
+    Toxicity: ${JSON.stringify(toxicityResults)}
+    Sentiment: ${sentimentResults.sentiment}
+    PII: ${piiResults.entityCount} entities found
+    ...`;
+  
+  // Call Amazon Bedrock Nova Lite
+  const response = await bedrock.send(new InvokeModelCommand({
+    modelId: 'global.amazon.nova-2-lite-v1:0',
+    body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] })
+  }));
+  
+  return { summary, modelId, generatedAt };
+});
 ```
 
 **What happens:**
@@ -342,13 +471,41 @@ context.step('generate-summary', async () => {
 - Falls back gracefully if AI generation fails
 
 ### Step 9: Save Results
-```
-context.step('save-results', async () => {
-  // Generate scanId and extract userId
-  // Save full JSON report to S3
-  // Generate and save HTML report to S3
-  // Save metadata to DynamoDB with PENDING_REVIEW status
-})
+```typescript
+const scanRecord = await context.step('save-results', async () => {
+  // Determine overall assessment
+  let overallAssessment: 'SAFE' | 'CAUTION' | 'UNSAFE' = 'SAFE';
+  if (toxicityResults.hasToxicContent || piiResults.hasPII) {
+    overallAssessment = 'UNSAFE';
+  } else if (sentimentResults.sentiment === 'NEGATIVE' || 
+             sentimentResults.sentiment === 'MIXED') {
+    overallAssessment = 'CAUTION';
+  }
+  
+  // Save JSON report to S3
+  await s3.send(new PutObjectCommand({
+    Bucket: bucketName,
+    Key: `reports/${scanId}.json`,
+    Body: JSON.stringify(completeResult, null, 2)
+  }));
+  
+  // Save metadata to DynamoDB
+  await ddb.send(new PutItemCommand({
+    TableName: SCANNER_TABLE,
+    Item: marshall({
+      PK: `SCAN#${scanId}`,
+      SK: 'METADATA',
+      GSI1PK: `USER#${userId}`,
+      GSI1SK: uploadedAt,
+      GSI2PK: 'STATUS#PENDING_REVIEW',
+      GSI2SK: uploadedAt,
+      approvalStatus: 'PENDING_REVIEW',
+      // ... all scan metadata
+    })
+  }));
+  
+  return { scanId, userId, uploadedAt, jsonReportKey, overallAssessment };
+});
 ```
 
 **What happens:**
@@ -356,27 +513,38 @@ context.step('save-results', async () => {
 - Extracts userId from object key (`raw/{userId}/{filename}`)
 - Determines overall assessment (SAFE/CAUTION/UNSAFE)
 - Saves complete JSON report to S3 (`reports/{scanId}.json`)
-- Generates beautiful HTML report with color-coded results
-- Saves HTML report to S3 (`reports/{scanId}.html`)
 - Stores metadata in DynamoDB with:
-  - User-based index for querying user's videos
-  - Approval status index for reviewer workflows
+  - GSI1 (user-based index): `USER#${userId}` for querying user's videos
+  - GSI2 (approval status index): `STATUS#PENDING_REVIEW` for reviewer workflows
   - Sets initial status to PENDING_REVIEW
+- Publishes REPORT_GENERATED and PENDING_REVIEW events
 
 ### Step 10: Wait for Human Approval (3-Day Timeout)
-```
-context.waitForCallback('human-approval', async (callbackToken) => {
-  // Store callback token in DynamoDB with 3-day TTL
-  // Function suspends waiting for approval decision
-}, { timeout: { seconds: 259200 } }) // 3 days
+```typescript
+const approvalResult = await context.waitForCallback<ApprovalResult>(
+  'human-approval',
+  async (callbackToken: string) => {
+    // Store callback token in DynamoDB with 3-day TTL
+    await ddb.send(new PutItemCommand({
+      TableName: SCANNER_TABLE,
+      Item: marshall({
+        PK: `SCAN#${scanId}`,
+        SK: 'TOKEN#approval',
+        callbackToken,
+        ttl: Math.floor(Date.now() / 1000) + 259200 // 3 days
+      })
+    }));
+  },
+  { timeout: { seconds: 259200 } } // 3 days
+);
 ```
 
 **What happens:**
-- Stores approval callback token in DynamoDB
+- Stores approval callback token in DynamoDB with 3-day TTL
 - Function suspends (no compute charges) waiting for human decision
-- Reviewer can approve or reject via approval callback function
+- Reviewer can approve or reject via `POST /approval` API endpoint
 - If no decision within 3 days, automatically rejects
-- Approval callback sends decision back to durable execution
+- Callback function sends decision back to durable execution
 - Function resumes with approval result
 
 **Approval Event Format:**
@@ -395,18 +563,37 @@ context.waitForCallback('human-approval', async (callbackToken) => {
 - Ensures videos don't remain in pending state indefinitely
 
 ### Step 11: Update Final Approval Status
-```
-context.step('update-approval-status', async () => {
-  // Update DynamoDB with final approval status
-  // Add reviewer information and timestamp
-})
+```typescript
+const finalStatus = await context.step('update-approval-status', async () => {
+  const finalApprovalStatus = approvalResult.approved ? 'APPROVED' : 'REJECTED';
+  
+  // Update DynamoDB record
+  await ddb.send(new PutItemCommand({
+    TableName: SCANNER_TABLE,
+    Item: marshall({
+      PK: `SCAN#${scanId}`,
+      SK: 'METADATA',
+      GSI2PK: `STATUS#${finalApprovalStatus}`, // Update status index
+      GSI2SK: uploadedAt,
+      approvalStatus: finalApprovalStatus,
+      reviewedBy: approvalResult.reviewedBy,
+      reviewedAt: approvalResult.reviewedAt,
+      reviewComments: approvalResult.comments,
+      // ... all previous scan data
+    })
+  }));
+  
+  return { approvalStatus: finalApprovalStatus, ... };
+});
 ```
 
 **What happens:**
 - Updates DynamoDB record with final status (APPROVED/REJECTED)
+- Updates GSI2 index from `STATUS#PENDING_REVIEW` to `STATUS#APPROVED` or `STATUS#REJECTED`
 - Adds reviewer information (reviewedBy, reviewedAt, comments)
 - Maintains all previous scan data
 - Enables querying by approval status for reporting
+- Publishes APPROVED or REJECTED event
 
 ### Final Result Structure
 
@@ -420,10 +607,9 @@ context.step('update-approval-status', async () => {
   "status": "completed",
   "approvalStatus": "APPROVED",
   "reviewedBy": "reviewer@example.com",
-  "reviewedAt": "2026-01-19T12:00:00.000Z",
+  "reviewedAt": "2026-01-24T12:00:00.000Z",
   "reviewComments": "Content looks good",
   "reportS3Key": "reports/uuid-here.json",
-  "htmlReportS3Key": "reports/uuid-here.html",
   "aiSummary": "This video contains moderate concerns...",
   "warnings": []
 }

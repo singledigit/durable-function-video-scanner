@@ -27,7 +27,7 @@ export const useAuth = () => {
         onSuccess: async (result) => {
           const groups = result.getIdToken().payload['cognito:groups'] || [];
           user.value = {
-            username: email,
+            username: cognitoUser.getUsername(),
             groups,
           };
           

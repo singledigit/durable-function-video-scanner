@@ -1,8 +1,8 @@
 import { withDurableExecution } from '@aws/durable-execution-sdk-js';
 import { v4 as uuidv4 } from 'uuid';
-import { logger, S3Event } from './config';
-import { runTranscribeWorkflow } from './jobs/transcribe';
-import { runRekognitionWorkflow } from './jobs/rekognition';
+import { logger, S3Event, TIMEOUTS, CALLBACK_RETRY_STRATEGY } from './config';
+import { startTranscriptionJob, fetchTranscript } from './jobs/transcribe';
+import { startRekognitionJob, fetchVideoText } from './jobs/rekognition';
 import { buildCorpus, mapResultsToSources } from './analysis/corpus';
 import { analyzeToxicity, analyzeSentiment, detectPII } from './analysis/comprehend';
 import { generateAISummary } from './reporting/ai-summary';
@@ -44,18 +44,58 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
     const parallelResults = await context.parallel([
       // Branch 1: Transcription workflow (audio analysis)
       async (childContext) => {
-        return await runTranscribeWorkflow(childContext, bucketName, objectKey, scanId);
+        // Start transcription and wait for callback
+        const transcriptionResult = await childContext.waitForCallback<string>(
+          'transcription-result',
+          async (callbackToken: string) => {
+            await startTranscriptionJob(bucketName, objectKey, scanId, callbackToken);
+          },
+          {
+            timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS },
+            retryStrategy: CALLBACK_RETRY_STRATEGY
+          }
+        );
+
+        // Fetch transcript from S3
+        const transcriptData = await childContext.step('fetch-transcript', async () => {
+          return await fetchTranscript(transcriptionResult);
+        });
+
+        return transcriptData;
       },
 
       // Branch 2: Rekognition workflow (video text detection)
       async (childContext) => {
-        return await runRekognitionWorkflow(childContext, bucketName, objectKey, scanId);
+        try {
+          // Start Rekognition and wait for callback
+          const rekognitionResult = await childContext.waitForCallback<string>(
+            'rekognition-result',
+            async (callbackToken: string) => {
+              await startRekognitionJob(bucketName, objectKey, scanId, callbackToken);
+            },
+            {
+              timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS },
+              retryStrategy: CALLBACK_RETRY_STRATEGY
+            }
+          );
+
+          // Fetch video text results
+          const videoTextData = await childContext.step('fetch-video-text', async () => {
+            return await fetchVideoText(rekognitionResult);
+          });
+
+          return { videoTextData, error: null };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.warn('Rekognition failed, continuing with audio-only', { error: errorMessage });
+          return { videoTextData: null, error: errorMessage };
+        }
       }
     ]);
 
     // Extract results from parallel execution with error handling
-    const transcriptData = parallelResults.all[0]?.result as import('./config').TranscriptData | undefined;
-    const rekognitionData = parallelResults.all[1]?.result as { videoTextData: import('./config').VideoTextData | null; error: string | null } | undefined;
+    const transcriptData = parallelResults.all[0]?.result;
+    const rekognitionData = parallelResults.all[1]?.result;
     
     if (!transcriptData) {
       throw new Error('Transcription failed - no transcript data returned');
@@ -120,9 +160,9 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
     ]);
 
     // Extract results from parallel execution
-    const toxicityResults = analysisResults.all[0].result as import('./config').ToxicityResult;
-    const sentimentResults = analysisResults.all[1].result as import('./config').SentimentResult;
-    const piiResults = analysisResults.all[2].result as import('./config').PiiResult;
+    const toxicityResults = analysisResults.all[0].result;
+    const sentimentResults = analysisResults.all[1].result;
+    const piiResults = analysisResults.all[2].result;
 
     logger.info('All analyses completed', {
       toxicity: toxicityResults,
