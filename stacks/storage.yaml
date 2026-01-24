@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Storage Stack - DynamoDB and S3
+
+Resources:
+  # ============================================
+  # DYNAMODB TABLE
+  # ============================================
+  
+  # Single-table design with GSIs for all scanner data
+  ScannerTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: scanner-table
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: GSI2PK
+          AttributeType: S
+        - AttributeName: GSI2SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: GSI2PK
+              KeyType: HASH
+            - AttributeName: GSI2SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+
+  # ============================================
+  # S3 BUCKET
+  # ============================================
+  
+  # Video upload bucket with EventBridge notifications
+  ScannerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+            AllowedHeaders:
+              - '*'
+            MaxAge: 3600
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+
+Outputs:
+  TableName:
+    Description: DynamoDB Table Name
+    Value: !Ref ScannerTable
+
+  TableArn:
+    Description: DynamoDB Table ARN
+    Value: !GetAtt ScannerTable.Arn
+
+  BucketName:
+    Description: S3 Bucket Name
+    Value: !Ref ScannerBucket
+
+  BucketArn:
+    Description: S3 Bucket ARN
+    Value: !GetAtt ScannerBucket.Arn

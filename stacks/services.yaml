@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Services Stack - Rekognition and supporting services
+
+Parameters:
+  BucketArn:
+    Type: String
+    Description: S3 Bucket ARN for Rekognition access
+
+Resources:
+  # ============================================
+  # REKOGNITION RESOURCES
+  # ============================================
+  
+  # SNS topic for Rekognition job completion notifications
+  RekognitionNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: rekognition-job-notifications
+
+  # IAM role for Rekognition to access S3 and publish to SNS
+  RekognitionServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rekognition.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RekognitionS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub '${BucketArn}/*'
+        - PolicyName: RekognitionSNSPublish
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref RekognitionNotificationTopic
+
+Outputs:
+  RekognitionNotificationTopicArn:
+    Description: Rekognition SNS Topic ARN
+    Value: !Ref RekognitionNotificationTopic
+
+  RekognitionServiceRoleArn:
+    Description: Rekognition Service Role ARN
+    Value: !GetAtt RekognitionServiceRole.Arn

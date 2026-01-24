@@ -3,21 +3,16 @@ Transform: AWS::Serverless-2016-10-31
 Description: WebSocket Stack - AppSync Events API
 
 Parameters:
-  AuthStackName:
-    Type: String
-    Description: Name of the auth stack to import Cognito resources
-    Default: video-scanner-auth
-
-Parameters:
-  AuthStackName:
-    Type: String
-    Description: Name of the parent auth stack
-    Default: video-scanner-auth
   UserPoolId:
     Type: String
     Description: Cognito User Pool ID from parent stack
 
 Resources:
+  # ============================================
+  # APPSYNC EVENTS API
+  # ============================================
+  
+  # AppSync Events API for real-time WebSocket communication
   AppSyncEventsApi:
     Type: AWS::AppSync::Api
     Properties:
@@ -36,6 +31,7 @@ Resources:
         DefaultSubscribeAuthModes:
           - AuthType: AMAZON_COGNITO_USER_POOLS
 
+  # Default channel namespace for publishing scan status updates
   AppSyncChannelNamespace:
     Type: AWS::AppSync::ChannelNamespace
     Properties:

@@ -160,9 +160,12 @@ const loadScan = async () => {
     
     // Get presigned URL for video
     if (scan.value.objectKey) {
-      const response = await fetch(`${config.public.apiEndpoint}/video-url`, {
+      const response = await fetch(`${config.public.apiEndpoint}/scans/${route.params.id}/video-url`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': await getIdToken()
+        },
         body: JSON.stringify({ objectKey: scan.value.objectKey })
       });
       const data = await response.json();

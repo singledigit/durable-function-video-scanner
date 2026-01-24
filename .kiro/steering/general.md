@@ -7,5 +7,6 @@ inclusion: always
 * Use powertools whenever possible https://docs.aws.amazon.com/powertools/typescript/latest/
     * Logging
     * Patterns
-* Durable functions reference https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html
+    * Tracing
+    * Metrics
 * When I ask a question, answer and make recommendations but wait for my approval to execute

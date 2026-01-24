@@ -22,7 +22,7 @@ export const useApi = () => {
   };
 
   const uploadVideo = async (filename: string, contentType: string) => {
-    return apiCall('/upload', {
+    return apiCall('/scans/upload', {
       method: 'POST',
       body: JSON.stringify({ filename, contentType }),
     });
@@ -37,7 +37,7 @@ export const useApi = () => {
   };
 
   const listPending = async () => {
-    return apiCall('/admin/pending');
+    return apiCall('/admin/scans/pending');
   };
 
   const approveScan = async (scanId: string, approved: boolean, comments?: string) => {

@@ -1,10 +1,16 @@
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { CognitoIdentityProviderClient, AdminCreateUserCommand, ListUsersCommand, AdminDeleteUserCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { SignatureV4 } from '@smithy/signature-v4';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { HttpRequest } from '@smithy/protocol-http';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 
+const dynamoClient = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(dynamoClient);
 const cognito = new CognitoIdentityProviderClient({});
+
+const TABLE_NAME = process.env.TABLE_NAME!;
 const USER_POOL_ID = process.env.USER_POOL_ID!;
 const APPSYNC_EVENTS_API_URL = process.env.APPSYNC_EVENTS_API_URL!;
 const AWS_REGION = process.env.AWS_REGION || 'us-west-2';
@@ -13,17 +19,87 @@ const headers = {
   'Content-Type': 'application/json',
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-  'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS'
+  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
 };
 
-export const handler = async (event: { httpMethod: string; path: string; body?: string; requestContext?: { authorizer?: { claims?: { sub: string } } } }) => {
+interface APIGatewayEvent {
+  httpMethod: string;
+  path: string;
+  body?: string;
+  pathParameters?: { [key: string]: string };
+  requestContext?: {
+    authorizer?: {
+      claims?: {
+        sub: string;
+      };
+    };
+  };
+}
+
+export const handler = async (event: APIGatewayEvent) => {
   const method = event.httpMethod;
   const path = event.path;
 
   try {
+    // GET /profile - Get user profile
+    if (method === 'GET' && path === '/profile') {
+      const userId = event.requestContext?.authorizer?.claims?.sub;
+      if (!userId) {
+        return {
+          statusCode: 401,
+          headers,
+          body: JSON.stringify({ error: 'Unauthorized' })
+        };
+      }
+
+      const result = await docClient.send(new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: `USER#${userId}`, SK: 'PROFILE' }
+      }));
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify(result.Item || {})
+      };
+    }
+
+    // PUT /profile - Update user profile
+    if (method === 'PUT' && path === '/profile') {
+      const userId = event.requestContext?.authorizer?.claims?.sub;
+      if (!userId) {
+        return {
+          statusCode: 401,
+          headers,
+          body: JSON.stringify({ error: 'Unauthorized' })
+        };
+      }
+
+      const body = JSON.parse(event.body || '{}');
+      const { firstName, lastName, displayName } = body;
+
+      await docClient.send(new PutCommand({
+        TableName: TABLE_NAME,
+        Item: {
+          PK: `USER#${userId}`,
+          SK: 'PROFILE',
+          firstName,
+          lastName,
+          displayName,
+          updatedAt: new Date().toISOString()
+        }
+      }));
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ success: true })
+      };
+    }
+
     // POST /admin/users/invite - Invite new user
     if (method === 'POST' && path.includes('/invite')) {
-      const { email } = JSON.parse(event.body);
+      const { email } = JSON.parse(event.body || '{}');
 
       const result = await cognito.send(new AdminCreateUserCommand({
         UserPoolId: USER_POOL_ID,
@@ -91,7 +167,7 @@ export const handler = async (event: { httpMethod: string; path: string; body?: 
     }
 
     // GET /admin/users - List all users
-    if (method === 'GET') {
+    if (method === 'GET' && path.includes('/admin/users')) {
       const result = await cognito.send(new ListUsersCommand({
         UserPoolId: USER_POOL_ID
       }));
@@ -110,8 +186,15 @@ export const handler = async (event: { httpMethod: string; path: string; body?: 
     }
 
     // DELETE /admin/users/{username} - Delete user
-    if (method === 'DELETE') {
+    if (method === 'DELETE' && path.includes('/admin/users/')) {
       const username = event.pathParameters?.username;
+      if (!username) {
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({ error: 'Username required' })
+        };
+      }
 
       await cognito.send(new AdminDeleteUserCommand({
         UserPoolId: USER_POOL_ID,
@@ -131,7 +214,7 @@ export const handler = async (event: { httpMethod: string; path: string; body?: 
       body: JSON.stringify({ error: 'Method not allowed' })
     };
   } catch (error: unknown) {
-    console.error('User management error:', error);
+    console.error('API error:', error);
     return {
       statusCode: 500,
       headers,

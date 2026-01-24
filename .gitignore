@@ -32,3 +32,6 @@ npm-debug.log*
 
 # SAM
 samconfig.toml
+
+# Demo files
+demo/
