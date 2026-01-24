@@ -220,7 +220,7 @@ const loadScans = async () => {
     const result = await listScans();
     scans.value = result.scans;
   } catch (error) {
-    console.error('Failed to load scans:', error);
+    // Handle error silently
   } finally {
     loading.value = false;
   }
@@ -278,7 +278,7 @@ const uploadFiles = async () => {
 
     selectedFiles.value = [];
   } catch (error) {
-    console.error('Upload failed:', error);
+    // Handle error silently
   } finally {
     uploading.value = false;
   }
@@ -290,13 +290,10 @@ const viewScan = (scanId: string) => {
 
 // Listen for realtime scan updates
 const handleScanUpdate = (event: CustomEvent) => {
-  console.log('Received scan update:', event.detail);
   const update = event.detail;
   
   // Find existing scan by scanId
   const existingIndex = scans.value.findIndex(s => s.scanId === update.scanId);
-  
-  console.log('Existing index:', existingIndex, 'Update scanId:', update.scanId);
   
   if (existingIndex >= 0) {
     // Update existing scan with new status - create new array for reactivity
@@ -321,11 +318,9 @@ const handleScanUpdate = (event: CustomEvent) => {
       overallAssessment: update.data?.overallAssessment || updatedScans[existingIndex].overallAssessment,
       isOptimistic: false,
     };
-    console.log('Updated scan:', updatedScans[existingIndex]);
     scans.value = updatedScans;
   } else if (update.type === 'SCAN_STARTED') {
     // New scan - remove optimistic entry and add real one
-    console.log('Adding new scan for SCAN_STARTED');
     scans.value = scans.value.filter(s => !s.isOptimistic);
     scans.value = [{
       scanId: update.scanId,

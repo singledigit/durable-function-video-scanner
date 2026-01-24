@@ -117,7 +117,7 @@ const loadPending = async () => {
     const result = await listPending();
     pendingScans.value = result.scans;
   } catch (error) {
-    console.error('Failed to load pending scans:', error);
+    // Handle error silently
   } finally {
     loading.value = false;
   }
@@ -133,7 +133,7 @@ const approve = async (scanId: string) => {
     pendingScans.value = pendingScans.value.filter(s => s.scanId !== scanId);
     await approveScan(scanId, true, 'Approved by admin');
   } catch (error) {
-    console.error('Failed to approve:', error);
+    // Handle error silently
     // Reload on error to restore the scan
     await loadPending();
   }
@@ -164,7 +164,7 @@ const confirmReject = async () => {
     pendingScans.value = pendingScans.value.filter(s => s.scanId !== scanId);
     await approveScan(scanId, false, comments);
   } catch (error) {
-    console.error('Failed to reject:', error);
+    // Handle error silently
     // Reload on error to restore the scan
     await loadPending();
   }
@@ -172,7 +172,6 @@ const confirmReject = async () => {
 
 // Listen for realtime scan updates
 const handleScanUpdate = (event: CustomEvent) => {
-  console.log('[Admin] Received scan update:', event.detail);
   const update = event.detail;
   
   // Remove from pending list if approved or rejected
@@ -185,7 +184,6 @@ const handleScanUpdate = (event: CustomEvent) => {
 };
 
 const handleAdminPendingReview = (event: CustomEvent) => {
-  console.log('[Admin] Received pending review:', event.detail);
   loadPending(); // Refresh pending list
 };
 

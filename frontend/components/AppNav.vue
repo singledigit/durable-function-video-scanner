@@ -95,7 +95,7 @@ onMounted(async () => {
       displayName.value = profile.displayName;
     }
   } catch (e) {
-    console.error('Failed to load profile:', e);
+    // Handle error silently
   }
 
   document.addEventListener('click', (e) => {

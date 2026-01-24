@@ -172,7 +172,7 @@ const loadScan = async () => {
       videoUrl.value = data.url;
     }
   } catch (error) {
-    console.error('Failed to load scan:', error);
+    // Handle error silently
   } finally {
     loading.value = false;
   }
@@ -184,7 +184,7 @@ const approve = async () => {
     await loadScan();
     alert('Scan approved successfully');
   } catch (error) {
-    console.error('Failed to approve:', error);
+    // Handle error silently
     alert('Failed to approve scan');
   }
 };
@@ -196,7 +196,7 @@ const reject = async () => {
     await loadScan();
     alert('Scan rejected successfully');
   } catch (error) {
-    console.error('Failed to reject:', error);
+    // Handle error silently
     alert('Failed to reject scan');
   }
 };

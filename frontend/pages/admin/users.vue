@@ -88,7 +88,7 @@ const loadUsers = async () => {
   try {
     users.value = await listUsers();
   } catch (e) {
-    console.error('Failed to load users:', e);
+    // Handle error silently
     error.value = 'Failed to load users. The API endpoint may not be deployed yet.';
   } finally {
     loadingUsers.value = false;

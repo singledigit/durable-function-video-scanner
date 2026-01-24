@@ -82,7 +82,7 @@ onMounted(async () => {
       profile.value = data;
     }
   } catch (e) {
-    console.error('Failed to load profile:', e);
+    // Handle error silently
   }
 });
 

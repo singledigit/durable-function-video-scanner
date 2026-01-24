@@ -55,7 +55,6 @@ class AppSyncEventsService {
   private setConnectionState(state: ConnectionState): void {
     if (this.connectionState !== state) {
       this.connectionState = state;
-      console.log(`[AppSync Events] Connection state: ${state}`);
       this.connectionStateCallbacks.forEach(callback => callback(state));
     }
   }
@@ -76,16 +75,12 @@ class AppSyncEventsService {
     try {
       const authSubprotocol = this.getAuthSubprotocol();
       
-      console.log('[AppSync Events] Connecting to:', this.realtimeEndpoint);
-      console.log('[AppSync Events] Using HTTP host for auth:', new URL(this.httpEndpoint).host);
-      
       this.ws = new WebSocket(this.realtimeEndpoint, [authSubprotocol, 'aws-appsync-event-ws']);
       this.ws.onopen = this.handleOpen.bind(this);
       this.ws.onmessage = this.handleMessage.bind(this);
       this.ws.onerror = this.handleError.bind(this);
       this.ws.onclose = this.handleClose.bind(this);
     } catch (error) {
-      console.error('[AppSync Events] Connection error:', error);
       this.setConnectionState(ConnectionState.ERROR);
       this.scheduleReconnection();
       throw error;
@@ -112,18 +107,14 @@ class AppSyncEventsService {
   }
 
   private handleOpen(): void {
-    console.log('[AppSync Events] WebSocket connected');
     this.ws!.send(JSON.stringify({ type: 'connection_init' }));
   }
 
   private handleMessage(event: MessageEvent): void {
     try {
-      console.log('[AppSync Events] Raw message received:', event.data);
       const message = JSON.parse(event.data);
-      console.log('[AppSync Events] Parsed message:', message);
       
       if (message.type === 'connection_ack') {
-        console.log('[AppSync Events] Connection acknowledged');
         this.setConnectionState(ConnectionState.CONNECTED);
         this.reconnectionAttempts = 0;
         this.startHeartbeat();
@@ -132,45 +123,35 @@ class AppSyncEventsService {
       }
 
       if (message.type === 'ka') {
-        console.log('[AppSync Events] Keep-alive received');
         return;
       }
       
       if (message.type === 'error') {
-        console.error('[AppSync Events] Error message received:', message.errors);
         return;
       }
       
       if (message.type === 'subscribe_success') {
-        console.log('[AppSync Events] Subscription confirmed:', message.id);
         return;
       }
 
       if (message.type === 'data') {
-        console.log('[AppSync Events] Data message received:', message);
         const channel = this.subscriptionIdToChannel.get(message.id);
         if (channel) {
           const callbacks = this.subscriptions.get(channel);
-          // Parse the event string into an object
           const eventData = typeof message.event === 'string' ? JSON.parse(message.event) : message.event;
-          console.log('[AppSync Events] Dispatching event to callbacks:', eventData);
           callbacks?.forEach(sub => sub.callback(eventData));
-        } else {
-          console.warn('[AppSync Events] No channel found for subscription:', message.id);
         }
       }
     } catch (error) {
-      console.error('[AppSync Events] Message parse error:', error);
+      // Silently handle parse errors
     }
   }
 
   private handleError(error: Event): void {
-    console.error('[AppSync Events] WebSocket error:', error);
     this.setConnectionState(ConnectionState.ERROR);
   }
 
   private handleClose(): void {
-    console.log('[AppSync Events] WebSocket closed');
     this.setConnectionState(ConnectionState.DISCONNECTED);
     this.stopHeartbeat();
     
@@ -187,7 +168,6 @@ class AppSyncEventsService {
       // Just a placeholder to check connection health
       // The actual keep-alive is handled by the server's "ka" messages
       if (this.ws?.readyState !== WebSocket.OPEN) {
-        console.warn('[AppSync Events] WebSocket not open, reconnecting...');
         this.scheduleReconnection();
       }
     }, 30000);
@@ -205,8 +185,6 @@ class AppSyncEventsService {
 
     const delay = Math.min(1000 * Math.pow(2, this.reconnectionAttempts), 30000);
     this.reconnectionAttempts++;
-
-    console.log(`[AppSync Events] Reconnecting in ${delay}ms (attempt ${this.reconnectionAttempts})`);
     
     this.reconnectionTimer = setTimeout(() => {
       this.reconnectionTimer = null;
@@ -246,8 +224,6 @@ class AppSyncEventsService {
           Authorization: this.authToken
         }
       }));
-      
-      console.log(`[AppSync Events] Subscribed to ${formattedChannel} (id: ${subscriptionId})`);
     }
   }
 
