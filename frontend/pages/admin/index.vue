@@ -48,13 +48,45 @@
                 Approve
               </button>
               <button
-                @click="reject(scan.scanId)"
+                @click="openRejectModal(scan.scanId)"
                 class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
               >
                 Reject
               </button>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reject Modal -->
+    <div
+      v-if="showRejectModal"
+      class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+      @click.self="closeRejectModal"
+    >
+      <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+        <h3 class="text-lg font-semibold mb-4">Reject Video</h3>
+        <p class="text-sm text-gray-600 mb-4">Please provide a reason for rejection:</p>
+        <textarea
+          v-model="rejectComments"
+          class="w-full border border-gray-300 rounded p-2 mb-4 min-h-[100px]"
+          placeholder="Enter rejection reason..."
+          @keydown.esc="closeRejectModal"
+        ></textarea>
+        <div class="flex gap-2 justify-end">
+          <button
+            @click="closeRejectModal"
+            class="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+          >
+            Cancel
+          </button>
+          <button
+            @click="confirmReject"
+            class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+          >
+            Reject
+          </button>
         </div>
       </div>
     </div>
@@ -75,6 +107,9 @@ if (!isAdmin.value) {
 
 const pendingScans = ref<any[]>([]);
 const loading = ref(true);
+const showRejectModal = ref(false);
+const rejectComments = ref('');
+const rejectingScanId = ref<string | null>(null);
 
 const loadPending = async () => {
   loading.value = true;
@@ -104,12 +139,30 @@ const approve = async (scanId: string) => {
   }
 };
 
-const reject = async (scanId: string) => {
-  const comments = prompt('Rejection reason (optional):');
+const openRejectModal = (scanId: string) => {
+  rejectingScanId.value = scanId;
+  rejectComments.value = '';
+  showRejectModal.value = true;
+};
+
+const closeRejectModal = () => {
+  showRejectModal.value = false;
+  rejectingScanId.value = null;
+  rejectComments.value = '';
+};
+
+const confirmReject = async () => {
+  if (!rejectingScanId.value) return;
+  
+  const scanId = rejectingScanId.value;
+  const comments = rejectComments.value.trim() || 'Rejected by admin';
+  
+  closeRejectModal();
+  
   try {
     // Optimistically remove from list
     pendingScans.value = pendingScans.value.filter(s => s.scanId !== scanId);
-    await approveScan(scanId, false, comments || 'Rejected by admin');
+    await approveScan(scanId, false, comments);
   } catch (error) {
     console.error('Failed to reject:', error);
     // Reload on error to restore the scan
