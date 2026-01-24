@@ -1,8 +1,8 @@
 import { withDurableExecution } from '@aws/durable-execution-sdk-js';
 import { v4 as uuidv4 } from 'uuid';
-import { logger, S3Event } from './config';
-import { runTranscribeWorkflow } from './jobs/transcribe';
-import { runRekognitionWorkflow } from './jobs/rekognition';
+import { logger, S3Event, CALLBACK_TIMEOUT_SECONDS, CALLBACK_RETRY_STRATEGY } from './config';
+import { startTranscriptionJob, fetchTranscriptFromS3 } from './jobs/transcribe-helpers';
+import { startRekognitionJob, fetchVideoTextResults } from './jobs/rekognition-helpers';
 import { buildCorpus, mapResultsToSources } from './analysis/corpus';
 import { analyzeToxicity } from './analysis/toxicity';
 import { analyzeSentiment } from './analysis/sentiment';
@@ -12,16 +12,7 @@ import { saveReportsToS3 } from './storage/s3';
 import { saveScanMetadata, waitForApproval, updateApprovalStatus } from './storage/dynamodb';
 import { publishEvent } from './events/appsync';
 
-/**
- * Scanner Durable Function
- * 
- * Orchestrates video content scanning using AWS services:
- * - Transcribe for audio analysis
- * - Rekognition for video text detection
- * - Comprehend for toxicity, sentiment, and PII detection
- * - Bedrock for AI-powered summary generation
- * - Human-in-the-loop approval workflow
- */
+
 export const handler = withDurableExecution(async (event: S3Event, context) => {
   const bucketName = event.detail.bucket.name;
   const objectKey = event.detail.object.key;
@@ -56,12 +47,52 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
     const parallelResults = await context.parallel([
       // Branch 1: Transcription workflow (audio analysis)
       async (childContext) => {
-        return await runTranscribeWorkflow(childContext, bucketName, objectKey, scanId);
+        // Start transcription and wait for callback
+        const transcriptionResult = await childContext.waitForCallback<string>(
+          'transcription-result',
+          async (callbackToken: string) => {
+            await startTranscriptionJob(bucketName, objectKey, scanId, callbackToken);
+          },
+          { 
+            timeout: { seconds: CALLBACK_TIMEOUT_SECONDS }, 
+            retryStrategy: CALLBACK_RETRY_STRATEGY 
+          }
+        );
+
+        // Fetch transcript from S3
+        const transcriptData = await childContext.step('fetch-transcript', async () => {
+          return await fetchTranscriptFromS3(transcriptionResult);
+        });
+
+        return transcriptData;
       },
 
       // Branch 2: Rekognition workflow (video text detection)
       async (childContext) => {
-        return await runRekognitionWorkflow(childContext, bucketName, objectKey, scanId);
+        try {
+          // Start Rekognition and wait for callback
+          const rekognitionResult = await childContext.waitForCallback<string>(
+            'rekognition-result',
+            async (callbackToken: string) => {
+              await startRekognitionJob(bucketName, objectKey, scanId, callbackToken);
+            },
+            { 
+              timeout: { seconds: CALLBACK_TIMEOUT_SECONDS }, 
+              retryStrategy: CALLBACK_RETRY_STRATEGY 
+            }
+          );
+
+          // Fetch video text results
+          const videoTextData = await childContext.step('fetch-video-text', async () => {
+            return await fetchVideoTextResults(rekognitionResult);
+          });
+
+          return { videoTextData, error: null };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.warn('Rekognition failed, continuing with audio-only', { error: errorMessage });
+          return { videoTextData: null, error: errorMessage };
+        }
       }
     ]);
 
