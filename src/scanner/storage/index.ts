@@ -1,12 +1,82 @@
 import { DurableContext } from '@aws/durable-execution-sdk-js';
 import { PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { marshall } from '@aws-sdk/util-dynamodb';
-import { logger, ddb, SCANNER_TABLE, CALLBACK_RETRY_STRATEGY, TIMEOUTS, ToxicityResult, PiiResult, SentimentResult } from '../config';
+import { logger, ddb, s3, SCANNER_TABLE, TIMEOUTS, CALLBACK_RETRY_STRATEGY, ToxicityResult, PiiResult, SentimentResult } from '../config';
 import { StorageError } from '../errors';
 
+// ============================================
+// CALLBACK TOKENS
+// ============================================
+
 /**
- * Helper to put an item to DynamoDB with marshalling
+ * Stores a callback token in DynamoDB for durable function workflows
  */
+export async function storeCallbackToken(
+  scanId: string,
+  jobName: string,
+  callbackToken: string,
+  metadata: Record<string, unknown> = {}
+): Promise<void> {
+  await ddb.send(new PutItemCommand({
+    TableName: SCANNER_TABLE,
+    Item: marshall({
+      PK: `SCAN#${scanId}`,
+      SK: `TOKEN#${jobName}`,
+      EntityType: 'CallbackToken',
+      jobName,
+      callbackToken,
+      ...metadata,
+      createdAt: new Date().toISOString(),
+      ttl: Math.floor(Date.now() / 1000) + TIMEOUTS.TOKEN_TTL_SECONDS
+    })
+  }));
+}
+
+// ============================================
+// S3 OPERATIONS
+// ============================================
+
+export async function saveReportsToS3(
+  bucketName: string,
+  scanId: string,
+  completeResult: Record<string, unknown>
+): Promise<{ jsonReportKey: string }> {
+  logger.info('Saving scan results to S3');
+  
+  try {
+    const jsonReportKey = `reports/${scanId}.json`;
+    await s3.send(new PutObjectCommand({
+      Bucket: bucketName,
+      Key: jsonReportKey,
+      Body: JSON.stringify(completeResult, null, 2),
+      ContentType: 'application/json'
+    }));
+    
+    logger.info('JSON report saved to S3', { jsonReportKey });
+    
+    return { jsonReportKey };
+  } catch (error) {
+    logger.error('Failed to save reports to S3', {
+      error: error instanceof Error ? error.message : String(error),
+      errorName: error instanceof Error ? error.name : 'Unknown',
+      bucketName,
+      scanId
+    });
+    
+    throw new StorageError(
+      'Failed to save reports to S3',
+      'write',
+      `s3://${bucketName}/reports/${scanId}`,
+      error instanceof Error ? error : undefined
+    );
+  }
+}
+
+// ============================================
+// DYNAMODB OPERATIONS
+// ============================================
+
 async function putItem(item: Record<string, unknown>): Promise<void> {
   await ddb.send(new PutItemCommand({
     TableName: SCANNER_TABLE,
@@ -14,9 +84,6 @@ async function putItem(item: Record<string, unknown>): Promise<void> {
   }));
 }
 
-/**
- * Helper to put an item to DynamoDB with marshalling and error handling
- */
 async function putItemWithErrorHandling(
   item: Record<string, unknown>,
   errorContext: { operation: string; scanId: string; userId?: string }
@@ -120,8 +187,6 @@ export async function waitForApproval(
       async (callbackToken: string) => {
         logger.info('Waiting for human approval', { scanId, callbackToken });
         
-        // Store callback token in DynamoDB for approval workflow
-        // Note: Using custom TTL of 3 days for approval tokens
         await putItem({
           PK: `SCAN#${scanId}`,
           SK: 'TOKEN#approval',
@@ -147,14 +212,12 @@ export async function waitForApproval(
       }
     );
     
-    // Parse if result is a string (durable SDK returns stringified result)
     const parsedResult = typeof approvalResult === 'string' 
       ? JSON.parse(approvalResult) 
       : approvalResult;
     
     return parsedResult;
   } catch (error) {
-    // Handle timeout - auto-reject after 3 days
     logger.warn('Approval timeout - auto-rejecting', {
       scanId,
       error: error instanceof Error ? error.message : String(error)
@@ -203,7 +266,6 @@ export async function updateApprovalStatus(
   const finalApprovalStatus = approvalResult.approved ? 'APPROVED' : 'REJECTED';
   const completedAt = new Date().toISOString();
   
-  // Update DynamoDB with final approval status
   await putItem({
     PK: `SCAN#${scanId}`,
     SK: 'METADATA',

@@ -9,7 +9,7 @@ import {
   CALLBACK_RETRY_STRATEGY,
   TranscriptData
 } from '../config';
-import { storeCallbackToken } from '../storage/callback-tokens';
+import { storeCallbackToken } from '../storage';
 
 export async function runTranscribeWorkflow(
   context: DurableContext,
@@ -17,7 +17,6 @@ export async function runTranscribeWorkflow(
   objectKey: string,
   scanId: string
 ): Promise<TranscriptData> {
-  // Step 1: Start transcription and wait for callback
   const transcriptionResult = await context.waitForCallback<string>(
     'transcription-result',
     async (callbackToken: string) => {
@@ -25,7 +24,6 @@ export async function runTranscribeWorkflow(
       
       logger.info('Starting transcription job', { jobName, objectKey, scanId });
       
-      // Store callback token in DynamoDB
       await storeCallbackToken(scanId, jobName, callbackToken, {
         bucketName,
         objectKey
@@ -61,7 +59,6 @@ export async function runTranscribeWorkflow(
     }
   );
 
-  // Step 2: Fetch transcript from S3
   const transcriptData = await context.step('fetch-transcript', async () => {
     logger.info('Processing transcription callback result', { transcriptionResult });
     
@@ -69,7 +66,6 @@ export async function runTranscribeWorkflow(
       ? JSON.parse(transcriptionResult) 
       : transcriptionResult;
     
-    // Fetch full transcription job details
     const jobDetails = await transcribe.send(new GetTranscriptionJobCommand({
       TranscriptionJobName: parsedResult.jobName
     }));
@@ -85,7 +81,6 @@ export async function runTranscribeWorkflow(
     let bucket: string;
     let key: string;
     
-    // Parse S3 URI - can be s3://bucket/key or https://s3.region.amazonaws.com/bucket/key
     const s3UriMatch = transcriptUri.match(/s3:\/\/([^\/]+)\/(.+)/);
     const httpsUriMatch = transcriptUri.match(/https:\/\/s3[.-]([^.]+)\.amazonaws\.com\/([^\/]+)\/(.+)/);
     

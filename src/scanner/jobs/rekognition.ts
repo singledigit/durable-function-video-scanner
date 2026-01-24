@@ -10,7 +10,7 @@ import {
   THRESHOLDS,
   VideoTextData
 } from '../config';
-import { storeCallbackToken } from '../storage/callback-tokens';
+import { storeCallbackToken } from '../storage';
 
 export async function runRekognitionWorkflow(
   context: DurableContext,
@@ -19,7 +19,6 @@ export async function runRekognitionWorkflow(
   scanId: string
 ): Promise<{ videoTextData: VideoTextData | null; error: string | null }> {
   try {
-    // Step 3: Start Rekognition and wait for callback
     const rekognitionResult = await context.waitForCallback<string>(
       'rekognition-result',
       async (callbackToken: string) => {
@@ -27,7 +26,6 @@ export async function runRekognitionWorkflow(
         
         logger.info('Starting Rekognition text detection job', { jobName, objectKey, scanId });
         
-        // Store callback token in DynamoDB
         await storeCallbackToken(scanId, jobName, callbackToken, {
           bucketName,
           objectKey,
@@ -63,7 +61,6 @@ export async function runRekognitionWorkflow(
       }
     );
 
-    // Step 4: Fetch Rekognition results and extract video text
     const videoTextData = await context.step('fetch-video-text', async () => {
       logger.info('Fetching Rekognition results', { rekognitionResult });
       
@@ -78,7 +75,6 @@ export async function runRekognitionWorkflow(
       
       logger.info('Fetching text detection results', { jobId });
       
-      // Fetch all pages of results
       const textDetections: unknown[] = [];
       let nextToken: string | undefined;
       
@@ -97,7 +93,6 @@ export async function runRekognitionWorkflow(
       
       logger.info('Fetched text detections', { count: textDetections.length });
       
-      // Extract and deduplicate text with timestamps
       const textSegments: Array<{
         text: string;
         timestamp: number;
@@ -105,28 +100,26 @@ export async function runRekognitionWorkflow(
         boundingBox?: unknown;
       }> = [];
       
-      const seenText = new Map<string, number>(); // text -> first timestamp
+      const seenText = new Map<string, number>();
       
       for (const detection of textDetections) {
         const text = detection.TextDetection?.DetectedText;
         const confidence = detection.TextDetection?.Confidence || 0;
         const timestamp = detection.Timestamp || 0;
         
-        // Filter by confidence threshold
         if (confidence < THRESHOLDS.REKOGNITION_CONFIDENCE_MIN) continue;
         
         if (text && !seenText.has(text)) {
           seenText.set(text, timestamp);
           textSegments.push({
             text,
-            timestamp: timestamp / 1000, // Convert ms to seconds
-            confidence: confidence / 100, // Convert to 0-1 range
+            timestamp: timestamp / 1000,
+            confidence: confidence / 100,
             boundingBox: detection.TextDetection?.Geometry?.BoundingBox
           });
         }
       }
       
-      // Combine all unique text
       const fullText = textSegments.map(s => s.text).join(' ');
       
       logger.info('Video text extracted', { 
