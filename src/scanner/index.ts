@@ -1,6 +1,6 @@
 import { withDurableExecution } from '@aws/durable-execution-sdk-js';
 import { v4 as uuidv4 } from 'uuid';
-import { logger, S3Event, CALLBACK_TIMEOUT_SECONDS, CALLBACK_RETRY_STRATEGY } from './config';
+import { logger, S3Event, TIMEOUTS, CALLBACK_RETRY_STRATEGY } from './config';
 import { startTranscriptionJob, fetchTranscriptFromS3 } from './jobs/transcribe-helpers';
 import { startRekognitionJob, fetchVideoTextResults } from './jobs/rekognition-helpers';
 import { buildCorpus, mapResultsToSources } from './analysis/corpus';
@@ -54,7 +54,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
             await startTranscriptionJob(bucketName, objectKey, scanId, callbackToken);
           },
           { 
-            timeout: { seconds: CALLBACK_TIMEOUT_SECONDS }, 
+            timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS }, 
             retryStrategy: CALLBACK_RETRY_STRATEGY 
           }
         );
@@ -77,7 +77,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
               await startRekognitionJob(bucketName, objectKey, scanId, callbackToken);
             },
             { 
-              timeout: { seconds: CALLBACK_TIMEOUT_SECONDS }, 
+              timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS }, 
               retryStrategy: CALLBACK_RETRY_STRATEGY 
             }
           );

@@ -3,9 +3,7 @@ import { SignatureV4 } from '@smithy/signature-v4';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { HttpRequest } from '@smithy/protocol-http';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
-
-const APPSYNC_EVENTS_API_URL = process.env.APPSYNC_EVENTS_API_URL!;
-const AWS_REGION = process.env.AWS_REGION || 'us-west-2';
+import { APPSYNC_EVENTS_API_URL, AWS_REGION } from '../config';
 
 interface EventData {
   type: string;

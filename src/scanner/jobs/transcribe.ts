@@ -5,7 +5,7 @@ import {
   logger, 
   transcribe, 
   s3,
-  CALLBACK_TIMEOUT_SECONDS,
+  TIMEOUTS,
   CALLBACK_RETRY_STRATEGY,
   TranscriptData
 } from '../config';
@@ -56,7 +56,7 @@ export async function runTranscribeWorkflow(
       });
     },
     {
-      timeout: { seconds: CALLBACK_TIMEOUT_SECONDS },
+      timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS },
       retryStrategy: CALLBACK_RETRY_STRATEGY
     }
   );

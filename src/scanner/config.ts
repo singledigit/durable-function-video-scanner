@@ -6,10 +6,14 @@ import { ComprehendClient } from '@aws-sdk/client-comprehend';
 import { RekognitionClient } from '@aws-sdk/client-rekognition';
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 
+// ============================================================================
 // Logger
+// ============================================================================
 export const logger = new Logger({ serviceName: 'scanner' });
 
+// ============================================================================
 // AWS Service Clients
+// ============================================================================
 export const transcribe = new TranscribeClient({});
 export const ddb = new DynamoDBClient({});
 export const s3 = new S3Client({});
@@ -17,17 +21,40 @@ export const comprehend = new ComprehendClient({});
 export const rekognition = new RekognitionClient({});
 export const bedrock = new BedrockRuntimeClient({});
 
+// ============================================================================
 // Environment Variables
+// ============================================================================
+
+// Core
 export const SCANNER_TABLE = process.env.SCANNER_TABLE!;
+export const AWS_REGION = process.env.AWS_REGION || 'us-west-2';
+
+// Rekognition
 export const REKOGNITION_ROLE_ARN = process.env.REKOGNITION_ROLE_ARN!;
 export const REKOGNITION_SNS_TOPIC_ARN = process.env.REKOGNITION_SNS_TOPIC_ARN!;
+
+// Bedrock
 export const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'global.amazon.nova-2-lite-v1:0';
 
-// Callback Configuration
-export const CALLBACK_TIMEOUT_SECONDS = 1800; // 30 minutes
-export const CALLBACK_RETRY_STRATEGY = () => ({ shouldRetry: false }); // No retries
+// AppSync Events
+export const APPSYNC_EVENTS_API_URL = process.env.APPSYNC_EVENTS_API_URL!;
 
-// Timeout Configuration (in seconds)
+// ============================================================================
+// Durable Function Configuration
+// ============================================================================
+
+// Retry Strategy
+// Development: No retries for fast failure during development/debugging
+export const CALLBACK_RETRY_STRATEGY = () => ({ shouldRetry: false });
+
+// Production: Exponential backoff retry strategy for transient failures
+// Retries up to 3 times with exponential backoff (2s, 4s, 8s)
+// export const CALLBACK_RETRY_STRATEGY = (attempt: number) => ({
+//   shouldRetry: attempt < 3,
+//   delayInSeconds: Math.pow(2, attempt) // 2^1=2s, 2^2=4s, 2^3=8s
+// });
+
+// Timeouts (in seconds)
 export const TIMEOUTS = {
   CALLBACK_SECONDS: 1800,                 // 30 minutes for AWS service callbacks
   APPROVAL_SECONDS: 259200,               // 3 days for human approval
@@ -35,7 +62,11 @@ export const TIMEOUTS = {
   APPROVAL_TOKEN_TTL_SECONDS: 259200      // 3 days for approval tokens
 } as const;
 
-// AWS Service Limits (in bytes)
+// ============================================================================
+// AWS Service Configuration
+// ============================================================================
+
+// Service Limits (in bytes)
 export const SERVICE_LIMITS = {
   COMPREHEND_TOXICITY_MAX_BYTES: 100000,  // 100KB
   COMPREHEND_SENTIMENT_MAX_BYTES: 5000,   // 5KB
@@ -48,7 +79,10 @@ export const THRESHOLDS = {
   TOXICITY_SCORE_THRESHOLD: 0.5           // Score above this is considered toxic
 } as const;
 
+// ============================================================================
 // Type Definitions
+// ============================================================================
+
 export interface S3Event {
   detail: {
     bucket: {

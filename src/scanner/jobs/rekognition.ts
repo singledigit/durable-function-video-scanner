@@ -5,7 +5,7 @@ import {
   rekognition,
   REKOGNITION_ROLE_ARN,
   REKOGNITION_SNS_TOPIC_ARN,
-  CALLBACK_TIMEOUT_SECONDS,
+  TIMEOUTS,
   CALLBACK_RETRY_STRATEGY,
   THRESHOLDS,
   VideoTextData
@@ -58,7 +58,7 @@ export async function runRekognitionWorkflow(
         });
       },
       {
-        timeout: { seconds: CALLBACK_TIMEOUT_SECONDS },
+        timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS },
         retryStrategy: CALLBACK_RETRY_STRATEGY
       }
     );
