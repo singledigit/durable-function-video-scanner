@@ -15,11 +15,12 @@ import { publishEvent } from './events/appsync';
 /**
  * Scanner Durable Function
  * 
- * This function demonstrates AWS Lambda Durable Functions patterns:
- * - context.parallel() for concurrent execution
- * - context.waitForCallback() for async job completion
- * - context.step() for state management and idempotency
- * - Child contexts in parallel branches
+ * Orchestrates video content scanning using AWS services:
+ * - Transcribe for audio analysis
+ * - Rekognition for video text detection
+ * - Comprehend for toxicity, sentiment, and PII detection
+ * - Bedrock for AI-powered summary generation
+ * - Human-in-the-loop approval workflow
  */
 export const handler = withDurableExecution(async (event: S3Event, context) => {
   const bucketName = event.detail.bucket.name;
@@ -30,14 +31,15 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
   const keyParts = objectKey.split('/');
   const userId = keyParts.length >= 2 ? keyParts[1] : 'unknown';
 
-  // Generate scanId in a step for deterministic replay
+  // STEP: Generate unique scan ID and timestamp
+  // Uses context.step() to ensure deterministic replay - same scanId on retries
   const { scanId, uploadedAt } = await context.step('generate-scan-id', async () => ({
     scanId: uuidv4(),
     uploadedAt: new Date().toISOString(),
   }));
 
   try {
-    // Publish SCAN_STARTED event
+    // STEP: Publish scan started event to AppSync
     await context.step('publish-scan-started', async () => {
       await publishEvent({
         type: 'SCAN_STARTED',
@@ -48,10 +50,8 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       });
     });
 
-    // ========================================================================
-    // STEP 1-4: Run Transcribe and Rekognition in parallel
-    // ========================================================================
-    // Demonstrates: context.parallel() with child contexts
+    // STEP: Run Transcribe and Rekognition jobs in parallel
+    // Demonstrates context.parallel() with child contexts
     // Each branch uses waitForCallback() to handle async AWS service jobs
     const parallelResults = await context.parallel([
       // Branch 1: Transcription workflow (audio analysis)
@@ -83,7 +83,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       rekognitionFailed: !!rekognitionError
     });
 
-    // Publish TRANSCRIPTION_COMPLETED event
+    // STEP: Publish transcription completed event
     await context.step('publish-transcription-completed', async () => {
       await publishEvent({
         type: 'TRANSCRIPTION_COMPLETED',
@@ -97,7 +97,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       });
     });
 
-    // Publish REKOGNITION_COMPLETED event
+    // STEP: Publish rekognition completed event
     await context.step('publish-rekognition-completed', async () => {
       await publishEvent({
         type: 'REKOGNITION_COMPLETED',
@@ -117,18 +117,14 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       warnings.push(`Video text detection failed: ${rekognitionError}`);
     }
 
-    // ========================================================================
-    // STEP 5: Build combined corpus with source mapping
-    // ========================================================================
-    // Demonstrates: context.step() for idempotent operations
+    // STEP: Build combined corpus with source mapping
+    // Combines audio transcript and video text into single corpus for analysis
     const corpusData = await context.step('build-corpus', async () => {
       return buildCorpus(transcriptData, videoTextData);
     });
 
-    // ========================================================================
-    // STEP 6: Run parallel content analysis on combined corpus
-    // ========================================================================
-    // Demonstrates: context.parallel() for independent analysis tasks
+    // STEP: Run parallel content analysis on combined corpus
+    // Demonstrates context.parallel() for independent analysis tasks
     const analysisResults = await context.parallel([
       async () => analyzeToxicity(corpusData.combinedText),
       async () => analyzeSentiment(corpusData.combinedText),
@@ -146,7 +142,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       pii: piiResults
     });
 
-    // Publish ANALYSIS_COMPLETED event
+    // STEP: Publish analysis completed event
     await context.step('publish-analysis-completed', async () => {
       await publishEvent({
         type: 'ANALYSIS_COMPLETED',
@@ -161,16 +157,14 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       });
     });
 
-    // ========================================================================
-    // STEP 7: Map results back to sources (audio vs screen)
-    // ========================================================================
+    // STEP: Map analysis results back to sources (audio vs screen)
+    // Identifies whether issues came from audio transcript or video text
     const mappedResults = await context.step('map-to-sources', async () => {
       return mapResultsToSources(piiResults, corpusData.positionIndex, corpusData.combinedText);
     });
 
-    // ========================================================================
-    // STEP 8: Generate AI summary using Bedrock Nova Lite
-    // ========================================================================
+    // STEP: Generate AI summary using Bedrock Nova Lite
+    // Creates human-readable summary of all analysis results
     const aiSummary = await context.step('generate-summary', async () => {
       return await generateAISummary(
         toxicityResults,
@@ -183,9 +177,8 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       );
     });
 
-    // ========================================================================
-    // STEP 9: Save results to S3 and DynamoDB
-    // ========================================================================
+    // STEP: Save complete results to S3 and DynamoDB
+    // Persists full scan report and metadata for retrieval
     const scanRecord = await context.step('save-results', async () => {
       // Determine overall assessment
       let overallAssessment: 'SAFE' | 'CAUTION' | 'UNSAFE' = 'SAFE';
@@ -267,7 +260,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       };
     });
 
-    // Publish REPORT_GENERATED event
+    // STEP: Publish report generated event
     await context.step('publish-report-generated', async () => {
       await publishEvent({
         type: 'REPORT_GENERATED',
@@ -281,7 +274,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       });
     });
 
-    // Publish PENDING_REVIEW event
+    // STEP: Publish pending review event
     await context.step('publish-pending-review', async () => {
       await publishEvent({
         type: 'PENDING_REVIEW',
@@ -294,10 +287,9 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       });
     });
 
-    // ========================================================================
-    // STEP 10: Wait for human approval with 3-day timeout
-    // ========================================================================
-    // Demonstrates: context.waitForCallback() for human-in-the-loop workflows
+    // STEP: Wait for human approval with 3-day timeout
+    // Demonstrates context.waitForCallback() for human-in-the-loop workflows
+    // Suspends execution until admin approves/rejects or timeout occurs
     const approvalResult = await waitForApproval(
       context,
       scanRecord.scanId,
@@ -311,9 +303,8 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       approvalResult 
     });
 
-    // ========================================================================
-    // STEP 11: Update final approval status
-    // ========================================================================
+    // STEP: Update final approval status in DynamoDB
+    // Records the approval decision and updates scan status
     const finalStatus = await context.step('update-approval-status', async () => {
       return await updateApprovalStatus(
         scanRecord.scanId,
@@ -333,7 +324,7 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
       );
     });
 
-    // Publish final approval event
+    // STEP: Publish final approval status event
     await context.step('publish-approval-status', async () => {
       await publishEvent({
         type: approvalResult.approved ? 'APPROVED' : 'REJECTED',
