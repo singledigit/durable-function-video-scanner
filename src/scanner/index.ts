@@ -1,6 +1,16 @@
 import { withDurableExecution } from '@aws/durable-execution-sdk-js';
 import { v4 as uuidv4 } from 'uuid';
-import { logger, S3Event, TIMEOUTS, CALLBACK_RETRY_STRATEGY } from './config';
+import { 
+  logger, 
+  S3Event, 
+  TIMEOUTS, 
+  CALLBACK_RETRY_STRATEGY,
+  TranscriptData,
+  VideoTextData,
+  ToxicityResult,
+  SentimentResult,
+  PiiResult
+} from './config';
 import { startTranscriptionJob, fetchTranscript } from './jobs/transcribe';
 import { startRekognitionJob, fetchVideoText } from './jobs/rekognition';
 import { buildCorpus, mapResultsToSources } from './analysis/corpus';
@@ -94,8 +104,8 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
     ]);
 
     // Extract results from parallel execution with error handling
-    const transcriptData = parallelResults.all[0]?.result;
-    const rekognitionData = parallelResults.all[1]?.result;
+    const transcriptData = parallelResults.all[0]?.result as TranscriptData;
+    const rekognitionData = parallelResults.all[1]?.result as { videoTextData: VideoTextData | null; error: string | null };
     
     if (!transcriptData) {
       throw new Error('Transcription failed - no transcript data returned');
@@ -160,9 +170,9 @@ export const handler = withDurableExecution(async (event: S3Event, context) => {
     ]);
 
     // Extract results from parallel execution
-    const toxicityResults = analysisResults.all[0].result;
-    const sentimentResults = analysisResults.all[1].result;
-    const piiResults = analysisResults.all[2].result;
+    const toxicityResults = analysisResults.all[0].result as ToxicityResult;
+    const sentimentResults = analysisResults.all[1].result as SentimentResult;
+    const piiResults = analysisResults.all[2].result as PiiResult;
 
     logger.info('All analyses completed', {
       toxicity: toxicityResults,

@@ -8,11 +8,6 @@ import {
 } from '../config';
 import { storeCallbackToken } from '../storage';
 
-/**
- * Setup function for starting a transcription job
- * This is called by waitForCallback in the main index
- * Idempotent, not deterministic - uses Date.now() for unique job names
- */
 export async function startTranscriptionJob(
   bucketName: string,
   objectKey: string,
