@@ -25,13 +25,33 @@ Globals:
       MaxAge: "'600'"
 
 Resources:
-  # Nested stacks
+  # ============================================
+  # NESTED STACKS
+  # ============================================
   AuthStack:
     Type: AWS::Serverless::Application
     Properties:
       Location: stacks/auth.yaml
       Parameters:
         AdminEmail: !Ref AdminEmail
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+
+  StorageStack:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: stacks/storage.yaml
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+
+  ServicesStack:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: stacks/services.yaml
+      Parameters:
+        BucketArn: !GetAtt StorageStack.Outputs.BucketArn
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
 
   SocketsStack:
     Type: AWS::Serverless::Application
@@ -39,31 +59,12 @@ Resources:
       Location: stacks/sockets.yaml
       Parameters:
         UserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
 
-  # Create admin user using native CloudFormation
-  AdminUser:
-    Type: AWS::Cognito::UserPoolUser
-    Properties:
-      UserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
-      Username: !Ref AdminEmail
-      UserAttributes:
-        - Name: email
-          Value: !Ref AdminEmail
-        - Name: email_verified
-          Value: 'true'
-      DesiredDeliveryMediums:
-        - EMAIL
-
-  # Add admin user to Admins group
-  AdminUserGroupAttachment:
-    Type: AWS::Cognito::UserPoolUserToGroupAttachment
-    Properties:
-      UserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
-      Username: !Ref AdminEmail
-      GroupName: Admins
-    DependsOn: AdminUser
-
-  # API Gateway for frontend integration
+  # ============================================
+  # API GATEWAY
+  # ============================================
   ScannerApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -79,115 +80,18 @@ Resources:
           CognitoAuthorizer:
             UserPoolArn: !GetAtt AuthStack.Outputs.UserPoolArn
 
-  # Single DynamoDB table for all scanner data
-  ScannerTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: scanner-table
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: PK
-          AttributeType: S
-        - AttributeName: SK
-          AttributeType: S
-        - AttributeName: GSI1PK
-          AttributeType: S
-        - AttributeName: GSI1SK
-          AttributeType: S
-        - AttributeName: GSI2PK
-          AttributeType: S
-        - AttributeName: GSI2SK
-          AttributeType: S
-      KeySchema:
-        - AttributeName: PK
-          KeyType: HASH
-        - AttributeName: SK
-          KeyType: RANGE
-      GlobalSecondaryIndexes:
-        - IndexName: GSI1
-          KeySchema:
-            - AttributeName: GSI1PK
-              KeyType: HASH
-            - AttributeName: GSI1SK
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-        - IndexName: GSI2
-          KeySchema:
-            - AttributeName: GSI2PK
-              KeyType: HASH
-            - AttributeName: GSI2SK
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
-
-  # S3 Bucket for uploads
-  ScannerBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      NotificationConfiguration:
-        EventBridgeConfiguration:
-          EventBridgeEnabled: true
-      CorsConfiguration:
-        CorsRules:
-          - AllowedOrigins:
-              - '*'
-            AllowedMethods:
-              - GET
-              - PUT
-              - POST
-              - DELETE
-            AllowedHeaders:
-              - '*'
-            MaxAge: 3600
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-
-  # SNS Topic for Rekognition job completion notifications
-  RekognitionNotificationTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: rekognition-job-notifications
-
-  # IAM Role for Rekognition to access S3 and publish to SNS
-  RekognitionServiceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: rekognition.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: RekognitionS3Access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                Resource: !Sub '${ScannerBucket.Arn}/*'
-        - PolicyName: RekognitionSNSPublish
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource: !Ref RekognitionNotificationTopic
-
-  # Lambda Durable Function
+  # ============================================
+  # LAMBDA FUNCTIONS
+  # ============================================
+  
+  # Durable function that orchestrates video scanning workflow:
+  # - Triggered by S3 uploads to raw/ prefix
+  # - Runs Transcribe for audio transcription
+  # - Runs Rekognition for text detection in video
+  # - Analyzes content with Comprehend (toxicity, sentiment, PII)
+  # - Waits for human approval/rejection
+  # - Generates AI summary with Bedrock
+  # - Publishes real-time updates via AppSync
   ScannerFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -202,9 +106,9 @@ Resources:
         Variables:
           POWERTOOLS_SERVICE_NAME: scanner
           POWERTOOLS_LOG_LEVEL: INFO
-          SCANNER_TABLE: !Ref ScannerTable
-          REKOGNITION_ROLE_ARN: !GetAtt RekognitionServiceRole.Arn
-          REKOGNITION_SNS_TOPIC_ARN: !Ref RekognitionNotificationTopic
+          SCANNER_TABLE: !GetAtt StorageStack.Outputs.TableName
+          REKOGNITION_ROLE_ARN: !GetAtt ServicesStack.Outputs.RekognitionServiceRoleArn
+          REKOGNITION_SNS_TOPIC_ARN: !GetAtt ServicesStack.Outputs.RekognitionNotificationTopicArn
           BEDROCK_MODEL_ID: global.amazon.nova-2-lite-v1:0
           APPSYNC_EVENTS_API_URL: !Sub 'https://${SocketsStack.Outputs.AppSyncHttpEndpoint}/event'
       DurableConfig:
@@ -212,37 +116,45 @@ Resources:
         RetentionPeriodInDays: 30
       Policies:
         - S3ReadPolicy:
-            BucketName: !Ref ScannerBucket
+            BucketName: !GetAtt StorageStack.Outputs.BucketName
         - S3WritePolicy:
-            BucketName: !Ref ScannerBucket
+            BucketName: !GetAtt StorageStack.Outputs.BucketName
         - DynamoDBCrudPolicy:
-            TableName: !Ref ScannerTable
+            TableName: !GetAtt StorageStack.Outputs.TableName
         - Statement:
+            # Transcribe - Scoped to transcription jobs in this account/region
             - Effect: Allow
               Action:
                 - transcribe:StartTranscriptionJob
                 - transcribe:GetTranscriptionJob
                 - transcribe:TagResource
-              Resource: '*'
+              Resource: !Sub 'arn:aws:transcribe:${AWS::Region}:${AWS::AccountId}:transcription-job/*'
+            # Comprehend - Resource-level permissions not supported by AWS
+            # Must use '*' as per AWS service limitations
             - Effect: Allow
               Action:
                 - comprehend:DetectToxicContent
                 - comprehend:DetectSentiment
                 - comprehend:DetectPiiEntities
               Resource: '*'
+            # Rekognition - Resource-level permissions not supported by AWS
+            # Must use '*' as per AWS service limitations
             - Effect: Allow
               Action:
                 - rekognition:StartTextDetection
                 - rekognition:GetTextDetection
               Resource: '*'
+            # IAM PassRole - Scoped to specific Rekognition service role
             - Effect: Allow
               Action:
                 - iam:PassRole
-              Resource: !GetAtt RekognitionServiceRole.Arn
+              Resource: !GetAtt ServicesStack.Outputs.RekognitionServiceRoleArn
+            # Bedrock - Scoped to specific Nova model
             - Effect: Allow
               Action:
                 - bedrock:InvokeModel
-              Resource: '*'
+              Resource: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0'
+            # AppSync - Scoped to specific API
             - Effect: Allow
               Action:
                 - appsync:EventPublish
@@ -259,7 +171,7 @@ Resources:
               detail:
                 bucket:
                   name:
-                    - !Ref ScannerBucket
+                    - !GetAtt StorageStack.Outputs.BucketName
                 object:
                   key:
                     - prefix: raw/
@@ -272,7 +184,11 @@ Resources:
         EntryPoints:
           - index.ts
 
-  # Unified Callback Function
+  # Unified callback handler that receives completion events and sends them to durable executions:
+  # - Transcribe job completions (via EventBridge)
+  # - Rekognition job completions (via SNS)
+  # - Human approval/rejection decisions (via API Gateway)
+  # - Looks up callback tokens in DynamoDB and notifies the waiting durable function
   CallbackFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -283,10 +199,10 @@ Resources:
         Variables:
           POWERTOOLS_SERVICE_NAME: callback
           POWERTOOLS_LOG_LEVEL: INFO
-          SCANNER_TABLE: !Ref ScannerTable
+          SCANNER_TABLE: !GetAtt StorageStack.Outputs.TableName
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref ScannerTable
+            TableName: !GetAtt StorageStack.Outputs.TableName
         - Statement:
             - Effect: Allow
               Action:
@@ -296,7 +212,6 @@ Resources:
                 - !GetAtt ScannerFunction.Arn
                 - !Sub '${ScannerFunction.Arn}:*'
       Events:
-        # API Gateway endpoint for approval/rejection submissions
         ApprovalApi:
           Type: Api
           Properties:
@@ -318,7 +233,7 @@ Resources:
         RekognitionSNS:
           Type: SNS
           Properties:
-            Topic: !Ref RekognitionNotificationTopic
+            Topic: !GetAtt ServicesStack.Outputs.RekognitionNotificationTopicArn
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -328,138 +243,67 @@ Resources:
         EntryPoints:
           - index.ts
 
-  # API Functions
-  UploadFunction:
+  # API handler for all scan-related operations:
+  # - GET /scans - List user's scans
+  # - GET /scans/{scanId} - Get single scan details
+  # - POST /scans/upload - Generate presigned URL for video upload
+  # - POST /scans/{scanId}/video-url - Generate presigned URL to view video
+  # - GET /admin/scans/pending - List scans awaiting approval (admin only)
+  ApiScansFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/api-upload/
+      CodeUri: src/api-scans/
       Handler: index.handler
+      Description: Consolidated API for all scan-related operations
       Environment:
         Variables:
-          BUCKET_NAME: !Ref ScannerBucket
+          POWERTOOLS_SERVICE_NAME: api-scans
+          POWERTOOLS_LOG_LEVEL: INFO
+          TABLE_NAME: !GetAtt StorageStack.Outputs.TableName
+          BUCKET_NAME: !GetAtt StorageStack.Outputs.BucketName
       Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !GetAtt StorageStack.Outputs.TableName
+        - S3ReadPolicy:
+            BucketName: !GetAtt StorageStack.Outputs.BucketName
         - S3WritePolicy:
-            BucketName: !Ref ScannerBucket
+            BucketName: !GetAtt StorageStack.Outputs.BucketName
       Events:
-        Upload:
-          Type: Api
-          Properties:
-            RestApiId: !Ref ScannerApi
-            Path: /upload
-            Method: POST
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2022
-        Sourcemap: true
-        EntryPoints:
-          - index.ts
-
-  ListScansFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/api-list-scans/
-      Handler: index.handler
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref ScannerTable
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref ScannerTable
-      Events:
+        # List user's scans
         ListScans:
           Type: Api
           Properties:
             RestApiId: !Ref ScannerApi
             Path: /scans
             Method: GET
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2022
-        Sourcemap: true
-        EntryPoints:
-          - index.ts
-
-  GetScanFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/api-get-scan/
-      Handler: index.handler
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref ScannerTable
-          BUCKET_NAME: !Ref ScannerBucket
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref ScannerTable
-        - S3ReadPolicy:
-            BucketName: !Ref ScannerBucket
-      Events:
+        # Get single scan
         GetScan:
           Type: Api
           Properties:
             RestApiId: !Ref ScannerApi
             Path: /scans/{scanId}
             Method: GET
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2022
-        Sourcemap: true
-        EntryPoints:
-          - index.ts
-
-  ListPendingFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/api-list-pending/
-      Handler: index.handler
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref ScannerTable
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref ScannerTable
-      Events:
+        # List pending reviews (admin)
         ListPending:
           Type: Api
           Properties:
             RestApiId: !Ref ScannerApi
-            Path: /admin/pending
+            Path: /admin/scans/pending
             Method: GET
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2022
-        Sourcemap: true
-        EntryPoints:
-          - index.ts
-
-  VideoUrlFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/api-video-url/
-      Handler: index.handler
-      Environment:
-        Variables:
-          BUCKET_NAME: !Ref ScannerBucket
-      Policies:
-        - S3ReadPolicy:
-            BucketName: !Ref ScannerBucket
-      Events:
-        GetVideoUrl:
+        # Generate upload presigned URL
+        Upload:
           Type: Api
           Properties:
             RestApiId: !Ref ScannerApi
-            Path: /video-url
+            Path: /scans/upload
             Method: POST
-            Auth:
-              Authorizer: NONE
+        # Generate video presigned URL
+        VideoUrl:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /scans/{scanId}/video-url
+            Method: POST
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -469,49 +313,29 @@ Resources:
         EntryPoints:
           - index.ts
 
-  ProfileFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/api-profile/
-      Handler: index.handler
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref ScannerTable
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref ScannerTable
-      Events:
-        GetProfile:
-          Type: Api
-          Properties:
-            RestApiId: !Ref ScannerApi
-            Path: /profile
-            Method: GET
-        UpdateProfile:
-          Type: Api
-          Properties:
-            RestApiId: !Ref ScannerApi
-            Path: /profile
-            Method: PUT
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2022
-        Sourcemap: true
-        EntryPoints:
-          - index.ts
-
-  UsersFunction:
+  # API handler for user profile and admin user management:
+  # - GET /profile - Get current user's profile
+  # - PUT /profile - Update current user's profile
+  # - POST /admin/users/invite - Invite new user (admin only)
+  # - GET /admin/users - List all users (admin only)
+  # - DELETE /admin/users/{username} - Delete user (admin only)
+  # - Publishes user events to AppSync for real-time updates
+  ApiUsersFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/api-users/
       Handler: index.handler
+      Description: Consolidated API for user profile and admin user management
       Environment:
         Variables:
+          POWERTOOLS_SERVICE_NAME: api-users
+          POWERTOOLS_LOG_LEVEL: INFO
+          TABLE_NAME: !GetAtt StorageStack.Outputs.TableName
           USER_POOL_ID: !GetAtt AuthStack.Outputs.UserPoolId
           APPSYNC_EVENTS_API_URL: !Sub 'https://${SocketsStack.Outputs.AppSyncHttpEndpoint}/event'
       Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !GetAtt StorageStack.Outputs.TableName
         - Statement:
             - Effect: Allow
               Action:
@@ -524,6 +348,20 @@ Resources:
                 - appsync:EventPublish
               Resource: !Sub 'arn:aws:appsync:${AWS::Region}:${AWS::AccountId}:apis/${SocketsStack.Outputs.AppSyncApiId}/*'
       Events:
+        # User profile endpoints
+        GetProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /profile
+            Method: GET
+        UpdateProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ScannerApi
+            Path: /profile
+            Method: PUT
+        # Admin user management endpoints
         InviteUser:
           Type: Api
           Properties:
