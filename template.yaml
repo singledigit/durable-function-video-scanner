@@ -150,10 +150,18 @@ Resources:
                 - iam:PassRole
               Resource: !GetAtt ServicesStack.Outputs.RekognitionServiceRoleArn
             # Bedrock - Scoped to specific Nova model
+            # Need both inference profile and foundation model ARNs
+            # SDK may resolve inference profile to foundation model
             - Effect: Allow
               Action:
                 - bedrock:InvokeModel
-              Resource: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0'
+              Resource:
+                - arn:aws:bedrock:::foundation-model/amazon.nova-2-lite-v1:0
+                - arn:aws:bedrock:::inference-profile/global.amazon.nova-2-lite-v1:0
+                - arn:aws:bedrock:us-west-2:088483494489:inference-profile/global.amazon.nova-2-lite-v1:0
+                - arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-2-lite-v1:0
+                # - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/global.amazon.nova-2-lite-v1:0'
+                # - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-2-lite-v1:0'
             # AppSync - Scoped to specific API
             - Effect: Allow
               Action:
