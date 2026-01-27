@@ -801,6 +801,256 @@ sam local start-api
 - Verify TTL hasn't expired (24 hours)
 - Check EventBridge rule is triggering callback function
 
+## Complete Deployment Guide
+
+### Prerequisites
+
+Before deploying, ensure you have:
+
+- **AWS SAM CLI** installed ([installation guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html))
+- **AWS credentials** configured with appropriate permissions
+- **Node.js 24.x** installed for local development
+- **An email address** for the initial admin user
+
+### Backend Deployment
+
+#### 1. Deploy the SAM Application
+
+The application requires an admin email address as a parameter. This will create the initial admin user in Cognito:
+
+```bash
+sam deploy --parameter-overrides AdminEmail=your-email@example.com
+```
+
+**What happens:**
+- CloudFormation creates all AWS resources (Lambda, S3, DynamoDB, Cognito, etc.)
+- An admin user is created in the Cognito User Pool
+- **You will receive an email** with a temporary password at the provided email address
+- The temporary password must be changed on first login
+
+**Important Notes:**
+- The admin email must be a valid email address you can access
+- Check your spam folder if you don't receive the temporary password email
+- The temporary password expires after 7 days
+- You'll be prompted to change it when you first log in to the frontend
+
+#### 2. Get Stack Outputs
+
+After deployment completes, retrieve the stack outputs which contain all the configuration values needed for the frontend:
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name scanner-app \
+  --query 'Stacks[0].Outputs' \
+  --output table
+```
+
+Or get the complete `.env` file content directly:
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name scanner-app \
+  --query 'Stacks[0].Outputs[?OutputKey==`FrontendEnvFile`].OutputValue' \
+  --output text
+```
+
+**Key Outputs:**
+- `ApiEndpoint` - REST API URL for backend operations
+- `UserPoolId` - Cognito User Pool ID for authentication
+- `UserPoolClientId` - Cognito App Client ID
+- `AppSyncHttpEndpoint` - AppSync Events API for real-time updates
+- `AppSyncRealtimeEndpoint` - WebSocket endpoint for subscriptions
+- `Region` - AWS region where resources are deployed
+- `FrontendEnvFile` - Complete `.env` file content ready to copy
+
+### Frontend Setup
+
+#### 1. Navigate to Frontend Directory
+
+```bash
+cd frontend
+```
+
+#### 2. Configure Environment Variables
+
+Create a `.env` file in the `frontend/` directory using the stack outputs:
+
+```bash
+# Copy the FrontendEnvFile output directly
+aws cloudformation describe-stacks \
+  --stack-name scanner-app \
+  --query 'Stacks[0].Outputs[?OutputKey==`FrontendEnvFile`].OutputValue' \
+  --output text > .env
+```
+
+Or manually create `frontend/.env` with the following format:
+
+```env
+NUXT_PUBLIC_API_ENDPOINT=https://your-api-id.execute-api.us-west-2.amazonaws.com/prod
+NUXT_PUBLIC_USER_POOL_ID=us-west-2_xxxxxxxxx
+NUXT_PUBLIC_USER_POOL_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
+NUXT_PUBLIC_APPSYNC_HTTP_ENDPOINT=https://xxx.appsync-api.us-west-2.amazonaws.com/event
+NUXT_PUBLIC_APPSYNC_REALTIME_ENDPOINT=wss://xxx.appsync-realtime-api.us-west-2.amazonaws.com/event/realtime
+NUXT_PUBLIC_REGION=us-west-2
+```
+
+Replace the placeholder values with the actual outputs from your stack.
+
+#### 3. Install Dependencies
+
+```bash
+npm install
+```
+
+#### 4. Run Development Server
+
+```bash
+npm run dev
+```
+
+The frontend will be available at `http://localhost:3000`
+
+#### 5. First Login
+
+1. Navigate to `http://localhost:3000`
+2. Click "Sign In"
+3. Enter the admin email address you provided during deployment
+4. Enter the temporary password from the email
+5. You'll be prompted to set a new permanent password
+6. After changing the password, you'll be logged in as an admin user
+
+### User Management
+
+#### Admin Capabilities
+
+As an admin user, you can:
+
+- **Invite new users** via the Admin panel
+- **View all users** in the system
+- **Delete users** (except yourself)
+- **Review pending scans** from all users
+- **Approve or reject** video content
+
+#### Inviting New Users
+
+1. Log in as an admin user
+2. Navigate to the Admin panel (Admin → Users)
+3. Click "Invite User"
+4. Enter the new user's email address
+5. The user will receive an email with a temporary password
+6. They can log in and change their password on first access
+
+**User Roles:**
+- **Admin**: Full access to all features, user management, and all scans
+- **Regular User**: Can upload videos, view their own scans, but cannot access admin features
+
+#### User Workflow
+
+Regular users can:
+1. Upload videos through the dashboard
+2. View real-time processing updates via AppSync Events
+3. See their scan history
+4. View detailed scan reports
+5. Check approval status (Pending/Approved/Rejected)
+
+### Development Workflow
+
+#### Using SAM Sync for Rapid Development
+
+For faster iteration during development, use `sam sync` instead of `sam deploy`:
+
+```bash
+sam sync --watch
+```
+
+This command:
+- Watches for code changes in Lambda functions
+- Automatically rebuilds and deploys changes
+- Skips CloudFormation for code-only updates (much faster)
+- Ideal for active development
+
+**Note:** Infrastructure changes (new resources, IAM policies, etc.) still require `sam deploy`
+
+#### Testing Video Upload
+
+Upload a test video to trigger the workflow:
+
+```bash
+aws s3 cp your-video.mp4 \
+  s3://YOUR-BUCKET-NAME/raw/YOUR-USER-ID/video.mp4 \
+  --profile demo
+```
+
+Replace:
+- `YOUR-BUCKET-NAME` with the S3 bucket name from stack outputs
+- `YOUR-USER-ID` with the Cognito user's sub (UUID)
+
+#### Viewing Logs
+
+View Lambda function logs:
+
+```bash
+# Scanner function logs
+sam logs --stack-name scanner-app --name ScannerFunction --tail
+
+# Callback function logs
+sam logs --stack-name scanner-app --name CallbackFunction --tail
+
+# API functions logs
+sam logs --stack-name scanner-app --name ApiScansFunction --tail
+sam logs --stack-name scanner-app --name ApiUsersFunction --tail
+```
+
+#### Manual Approval Testing
+
+For testing the approval workflow without the frontend:
+
+```bash
+# Approve a scan
+sam remote callback succeed YOUR-CALLBACK-TOKEN \
+  --result '{"approved":true,"reviewedBy":"admin@example.com","comments":"Content looks good"}' \
+  --profile demo
+
+# Reject a scan
+sam remote callback succeed YOUR-CALLBACK-TOKEN \
+  --result '{"approved":false,"reviewedBy":"admin@example.com","comments":"Inappropriate content"}' \
+  --profile demo
+```
+
+The callback token is stored in DynamoDB and logged during workflow execution.
+
+### Production Deployment
+
+For production deployments:
+
+1. **Use a custom domain** for the API Gateway
+2. **Enable CloudFront** for the frontend
+3. **Configure proper CORS** origins (remove `'*'`)
+4. **Set up CloudWatch alarms** for error rates and latency
+5. **Enable AWS WAF** for API protection
+6. **Use AWS Secrets Manager** for sensitive configuration
+7. **Implement proper backup** strategies for DynamoDB
+8. **Configure VPC** for Lambda functions if required
+9. **Set up CI/CD pipeline** for automated deployments
+
+### Cleanup
+
+To remove all resources:
+
+```bash
+sam delete --stack-name scanner-app
+```
+
+This will delete:
+- All Lambda functions
+- S3 bucket (must be empty first)
+- DynamoDB tables
+- Cognito User Pool
+- API Gateway
+- All other created resources
+
+**Warning:** This action cannot be undone. Make sure to backup any important data first.
+
 ## License
 
 Apache 2.0
