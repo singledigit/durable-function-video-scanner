@@ -149,7 +149,7 @@ graph TB
     style RESUME1 fill:#ff9900,stroke:#333,stroke-width:2px
     style RESUME2 fill:#ff9900,stroke:#333,stroke-width:2px
     style RESUME3 fill:#ff9900,stroke:#333,stroke-width:2px
-    style STEP8B fill:#9c27b0,stroke:#333,stroke-width:2px
+    style STEP8B fill:#ce93d8,stroke:#333,stroke-width:2px
     style END fill:#4caf50,stroke:#333,stroke-width:2px
 ```
 
