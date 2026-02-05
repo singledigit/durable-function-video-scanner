@@ -215,7 +215,7 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
         throw new Error(`Could not extract scanId from jobName: ${jobName}`);
       }
       
-      const tokenSK = jobName.startsWith('transcribe-') ? `TOKEN#${jobName}` : `TOKEN#${jobName}`;
+      const tokenSK = `TOKEN#${jobName}`;
       
       getResult = await ddb.send(new GetItemCommand({
         TableName: SCANNER_TABLE,
