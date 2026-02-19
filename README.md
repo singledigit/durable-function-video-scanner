@@ -1,619 +1,185 @@
 # Video Scanner - Content Analysis Pipeline
 
-A serverless video content analysis pipeline built with AWS Lambda Durable Functions, demonstrating advanced orchestration patterns for long-running workflows with human-in-the-loop approval.
+A serverless video content analysis pipeline built with AWS Lambda Durable Functions, demonstrating advanced orchestration patterns for long-running workflows with human-in-the-loop approval and real-time UI updates.
 
 ## Overview
 
-This application automatically processes video files uploaded to S3, performing comprehensive content analysis through a multi-step durable workflow that can run for days while maintaining state. It demonstrates key durable function patterns including parallel execution, async callbacks, and human approval workflows.
+This application automatically processes video files uploaded to S3, performing comprehensive content analysis through a multi-step durable workflow that can run for days while maintaining state. It demonstrates key durable function patterns including parallel execution, async callbacks, human approval workflows, and real-time progress visualization.
 
 ## Architecture
 
-The system uses AWS Lambda Durable Functions to orchestrate a multi-step workflow that can run for up to 7 days while maintaining state and handling failures gracefully. The workflow demonstrates key patterns: parallel execution with child contexts, async callbacks for AWS service jobs, and human-in-the-loop approval with timeout handling.
-
-### Complete Workflow Diagram
+### System Architecture
 
 ```mermaid
 graph TB
-    START[Video Upload to S3] -->|EventBridge Rule| INIT[Scanner Function Invoked]
+    subgraph "Frontend"
+        UI[Nuxt.js Dashboard]
+        AppSync[AppSync Events API]
+    end
     
-    INIT --> STEP0[Step 0: Generate Scan ID]
-    STEP0 --> EVENT1[Publish: SCAN_STARTED]
+    subgraph "API Layer"
+        APIGW[API Gateway]
+        APIScans[api-scans Lambda]
+        APIUsers[api-users Lambda]
+    end
     
-    EVENT1 --> PARALLEL1{Parallel Execution<br/>Steps 1-4}
+    subgraph "Authentication"
+        Cognito[Cognito User Pool]
+    end
     
-    PARALLEL1 -->|Branch 1| TRANS1[Step 1: Start Transcription]
-    PARALLEL1 -->|Branch 2| REK1[Step 3: Start Rekognition]
+    subgraph "Storage"
+        S3[S3 Bucket<br/>Videos & Reports]
+        DDB[(DynamoDB<br/>Scans & Tokens)]
+    end
     
-    TRANS1 -->|Setup Function| TRANS1A[Store Callback Token<br/>DynamoDB TTL: 24h]
-    TRANS1A --> TRANS1B[Start Transcribe Job<br/>Job Name: transcribe-timestamp-scanId]
-    TRANS1B --> TRANS1C[waitForCallback<br/>Timeout: 30 min]
-    TRANS1C -->|Function Suspends| WAIT1[⏸️ Waiting]
+    subgraph "Orchestration"
+        Scanner[Scanner Function<br/>Durable Orchestrator]
+        Callback[Callback Function<br/>Unified Handler]
+    end
     
-    WAIT1 -->|Job Complete| EB1[EventBridge:<br/>Transcribe Job State Change]
-    EB1 --> CB1[Callback Function]
-    CB1 --> CB1A[Query DynamoDB<br/>Get Callback Token]
-    CB1A --> CB1B[SendDurableExecutionCallbackSuccess]
-    CB1B --> RESUME1[✅ Branch 1 Resumes]
+    subgraph "AWS AI Services"
+        Transcribe[Amazon Transcribe]
+        Rekognition[Amazon Rekognition]
+        Comprehend[Amazon Comprehend]
+        Bedrock[Amazon Bedrock<br/>Nova Lite]
+    end
     
-    RESUME1 --> TRANS2[Step 2: Fetch Transcript]
-    TRANS2 --> TRANS2A[GetTranscriptionJob API]
-    TRANS2A --> TRANS2B[Parse Transcript URI]
-    TRANS2B --> TRANS2C[Fetch JSON from S3]
-    TRANS2C --> TRANS2D[Extract Full Text + Timestamps]
+    subgraph "Event Sources"
+        EventBridge[EventBridge]
+        SNS[SNS Topic]
+    end
     
-    REK1 -->|Setup Function| REK1A[Store Callback Token<br/>DynamoDB TTL: 24h]
-    REK1A --> REK1B[Start Rekognition Job<br/>Job Name: rekognition-timestamp-scanId]
-    REK1B --> REK1C[waitForCallback<br/>Timeout: 30 min]
-    REK1C -->|Function Suspends| WAIT2[⏸️ Waiting]
+    UI -->|Auth| Cognito
+    UI -->|API Calls| APIGW
+    UI <-->|Real-time Events| AppSync
     
-    WAIT2 -->|Job Complete| SNS1[SNS Topic:<br/>Rekognition Notification]
-    SNS1 --> CB2[Callback Function]
-    CB2 --> CB2A[Query DynamoDB<br/>Get Callback Token]
-    CB2A --> CB2B[SendDurableExecutionCallbackSuccess]
-    CB2B --> RESUME2[✅ Branch 2 Resumes]
+    APIGW --> APIScans
+    APIGW --> APIUsers
+    APIScans --> DDB
+    APIUsers --> DDB
+    APIScans --> S3
     
-    RESUME2 --> REK2[Step 4: Fetch Video Text]
-    REK2 --> REK2A[GetTextDetection API<br/>Handle Pagination]
-    REK2A --> REK2B[Filter by Confidence >80%]
-    REK2B --> REK2C[Deduplicate Text Across Frames]
-    REK2C --> REK2D[Extract Text + Timestamps + Bounding Boxes]
+    S3 -->|Object Created| EventBridge
+    EventBridge -->|Trigger| Scanner
     
-    TRANS2D --> MERGE1[Parallel Results Merge]
-    REK2D --> MERGE1
+    Scanner -->|Start Jobs| Transcribe
+    Scanner -->|Start Jobs| Rekognition
+    Scanner -->|Analyze| Comprehend
+    Scanner -->|Generate Summary| Bedrock
+    Scanner -->|Save Results| S3
+    Scanner -->|Save Metadata| DDB
+    Scanner -->|Publish Events| AppSync
+    Scanner <-->|Wait for Callback| Callback
     
-    MERGE1 --> EVENT2[Publish: TRANSCRIPTION_COMPLETED]
-    EVENT2 --> EVENT3[Publish: REKOGNITION_COMPLETED]
+    Transcribe -->|Job Complete| EventBridge
+    EventBridge -->|Notify| Callback
     
-    EVENT3 --> STEP5[Step 5: Build Combined Corpus]
-    STEP5 --> STEP5A[Combine Audio + Screen Text]
-    STEP5A --> STEP5B[Create Position Index<br/>Map Each Word to Source]
-    STEP5B --> STEP5C[Preserve Timestamps]
+    Rekognition -->|Job Complete| SNS
+    SNS -->|Notify| Callback
     
-    STEP5C --> PARALLEL2{Parallel Analysis<br/>Step 6}
+    APIGW -->|Approval/Reject| Callback
     
-    PARALLEL2 --> TOX[Toxicity Detection]
-    PARALLEL2 --> SENT[Sentiment Analysis]
-    PARALLEL2 --> PII[PII Detection]
+    Callback -->|Resume| Scanner
     
-    TOX --> TOX1[Comprehend DetectToxicContent]
-    TOX1 --> TOX2[7 Categories:<br/>Profanity, Hate Speech, Insult,<br/>Graphic, Harassment, Sexual, Violence]
-    TOX2 --> TOX3[Auto-chunk if >100KB]
+    style Scanner fill:#ff9800
+    style Callback fill:#4caf50
+    style AppSync fill:#2196f3
+    style UI fill:#9c27b0
+```
+
+### Durable Function Orchestration Flow
+
+```mermaid
+graph TB
+    Start([S3 Upload Event]) --> Step0[Step 0: Generate Scan ID]
     
-    SENT --> SENT1[Comprehend DetectSentiment]
-    SENT1 --> SENT2[Returns: POSITIVE, NEGATIVE,<br/>NEUTRAL, MIXED]
-    SENT2 --> SENT3[Analyze first 5KB]
+    Step0 --> Event1[Publish: SCAN_STARTED]
+    Event1 --> Step1[Step 1: Parallel Execution]
     
-    PII --> PII1[Comprehend DetectPiiEntities]
-    PII1 --> PII2[Detects: Names, Emails, SSN,<br/>Credit Cards, Addresses, etc.]
-    PII2 --> PII3[Analyze first 100KB]
+    subgraph "Parallel Branch 1: Transcription"
+        Step1 --> T1[Start Transcribe Job]
+        T1 --> T2[Publish: TRANSCRIPTION_STARTED]
+        T2 --> T3[⏸️ Wait for Callback<br/>30 min timeout]
+        T3 --> T4[Fetch Transcript from S3]
+        T4 --> T5[Publish: TRANSCRIPTION_COMPLETED]
+    end
     
-    TOX3 --> MERGE2[Analysis Results Merge]
-    SENT3 --> MERGE2
-    PII3 --> MERGE2
+    subgraph "Parallel Branch 2: Rekognition"
+        Step1 --> R1[Start Rekognition Job]
+        R1 --> R2[Publish: REKOGNITION_STARTED]
+        R2 --> R3[⏸️ Wait for Callback<br/>30 min timeout]
+        R3 --> R4[Extract Video Text]
+        R4 --> R5[Publish: REKOGNITION_COMPLETED]
+    end
     
-    MERGE2 --> EVENT4[Publish: ANALYSIS_COMPLETED]
+    T5 --> Step2[Step 2: Build Corpus]
+    R5 --> Step2
     
-    EVENT4 --> STEP7[Step 7: Map to Sources]
-    STEP7 --> STEP7A[Use Position Index]
-    STEP7A --> STEP7B[Identify PII Source:<br/>Audio vs Screen]
-    STEP7B --> STEP7C[Create Source Breakdown]
+    Step2 --> Event2[Publish: BUILDING_CORPUS]
+    Event2 --> Step3[Step 3: Parallel Analysis]
     
-    STEP7C --> STEP8[Step 8: Generate AI Summary]
-    STEP8 --> STEP8A[Build Structured Prompt]
-    STEP8A --> STEP8B[Bedrock Nova Lite<br/>global.amazon.nova-2-lite-v1:0]
-    STEP8B --> STEP8C[3-4 Sentence Summary]
-    STEP8C --> STEP8D[Safety Assessment:<br/>SAFE / CAUTION / UNSAFE]
+    subgraph "Parallel Branch 3: Toxicity"
+        Step3 --> A1[Comprehend Toxicity]
+        A1 --> A2[Publish: TOXICITY_STARTED]
+        A2 --> A3[Detect Toxic Content]
+        A3 --> A4[Publish: TOXICITY_COMPLETED]
+    end
     
-    STEP8D --> STEP9[Step 9: Save Results]
-    STEP9 --> STEP9A[Generate scanId UUID]
-    STEP9A --> STEP9B[Determine Overall Assessment]
-    STEP9B --> STEP9C[Save JSON Report to S3<br/>reports/scanId.json]
-    STEP9C --> STEP9D[Save Metadata to DynamoDB]
-    STEP9D --> STEP9E[Set Status: PENDING_REVIEW<br/>GSI1: USER#userId<br/>GSI2: STATUS#PENDING_REVIEW]
+    subgraph "Parallel Branch 4: Sentiment"
+        Step3 --> S1[Comprehend Sentiment]
+        S1 --> S2[Publish: SENTIMENT_STARTED]
+        S2 --> S3[Analyze Sentiment]
+        S3 --> S4[Publish: SENTIMENT_COMPLETED]
+    end
     
-    STEP9E --> EVENT5[Publish: REPORT_GENERATED]
-    EVENT5 --> EVENT6[Publish: PENDING_REVIEW]
+    subgraph "Parallel Branch 5: PII"
+        Step3 --> P1[Comprehend PII]
+        P1 --> P2[Publish: PII_STARTED]
+        P2 --> P3[Detect PII Entities]
+        P3 --> P4[Publish: PII_COMPLETED]
+    end
     
-    EVENT6 --> STEP10[Step 10: Wait for Approval]
-    STEP10 --> STEP10A[Store Callback Token<br/>DynamoDB TTL: 3 days]
-    STEP10A --> STEP10B[waitForCallback<br/>Timeout: 3 days]
-    STEP10B -->|Function Suspends| WAIT3[⏸️ Waiting<br/>Up to 3 Days]
+    A4 --> Step4[Step 4: Map to Sources]
+    S4 --> Step4
+    P4 --> Step4
     
-    WAIT3 -->|Human Approves/Rejects| API[POST /approval<br/>Callback Function]
-    WAIT3 -->|3 Day Timeout| TIMEOUT[Auto-Reject]
+    Step4 --> Event3[Publish: ANALYSIS_COMPLETED]
+    Event3 --> Step5[Step 5: Generate AI Summary]
     
-    API --> CB3[Query DynamoDB<br/>Get Callback Token]
-    CB3 --> CB3A[SendDurableExecutionCallbackSuccess<br/>Pass Approval Decision]
-    CB3A --> RESUME3[✅ Function Resumes]
+    Step5 --> Event4[Publish: GENERATING_SUMMARY]
+    Event4 --> Bedrock[Bedrock Nova Lite]
+    Bedrock --> Step6[Step 6: Save Results]
     
-    TIMEOUT --> TIMEOUT1[Return Auto-Reject Result<br/>reviewedBy: system]
-    TIMEOUT1 --> RESUME3
+    Step6 --> SaveS3[Save JSON/HTML to S3]
+    SaveS3 --> SaveDDB[Save Metadata to DynamoDB]
+    SaveDDB --> Event5[Publish: REPORT_GENERATED]
     
-    RESUME3 --> STEP11[Step 11: Update Approval Status]
-    STEP11 --> STEP11A[Update DynamoDB Record]
-    STEP11A --> STEP11B[Set approvalStatus:<br/>APPROVED or REJECTED]
-    STEP11B --> STEP11C[Update GSI2:<br/>STATUS#APPROVED or STATUS#REJECTED]
-    STEP11C --> STEP11D[Add reviewedBy, reviewedAt, comments]
+    Event5 --> Event6[Publish: PENDING_REVIEW]
+    Event6 --> Step7[Step 7: Human Approval]
     
-    STEP11D --> EVENT7[Publish: APPROVED or REJECTED]
+    Step7 --> Wait[⏸️ Wait for Callback<br/>3 day timeout]
+    Wait -->|Approved| Approve[Publish: APPROVED]
+    Wait -->|Rejected| Reject[Publish: REJECTED]
+    Wait -->|Timeout| Timeout[Auto-Reject]
     
-    EVENT7 --> FINAL[Return Final Result]
-    FINAL --> END[✅ Workflow Complete]
+    Approve --> End([Workflow Complete])
+    Reject --> End
+    Timeout --> End
     
-    style INIT fill:#ff9900,stroke:#333,stroke-width:2px
-    style PARALLEL1 fill:#4caf50,stroke:#333,stroke-width:2px
-    style PARALLEL2 fill:#4caf50,stroke:#333,stroke-width:2px
-    style WAIT1 fill:#ffeb3b,stroke:#333,stroke-width:2px
-    style WAIT2 fill:#ffeb3b,stroke:#333,stroke-width:2px
-    style WAIT3 fill:#ffeb3b,stroke:#333,stroke-width:2px
-    style RESUME1 fill:#ff9900,stroke:#333,stroke-width:2px
-    style RESUME2 fill:#ff9900,stroke:#333,stroke-width:2px
-    style RESUME3 fill:#ff9900,stroke:#333,stroke-width:2px
-    style STEP8B fill:#ce93d8,stroke:#333,stroke-width:2px
-    style END fill:#4caf50,stroke:#333,stroke-width:2px
+    style Step1 fill:#9c27b0
+    style Step3 fill:#9c27b0
+    style T3 fill:#ffc107
+    style R3 fill:#ffc107
+    style Wait fill:#ffc107
+    style Bedrock fill:#e91e63
+    style End fill:#4caf50
 ```
 
 **Legend:**
-- 🟠 Orange: Active Durable Function Execution
-- 🟡 Yellow: Function Suspended
-- 🟢 Green: Parallel Execution / Completion
-- 🟣 Purple: AI Processing (Bedrock)
-- ⏸️ Suspension Points: Function pauses, state saved
-
-### Components
-
-- **Scanner Function** (Durable): Main orchestrator implementing the complete 11-step workflow with parallel execution and human approval
-- **Callback Function**: Unified handler processing callbacks from three sources:
-  - EventBridge events (Transcribe job completion)
-  - SNS notifications (Rekognition job completion)  
-  - API Gateway (Human approval/rejection decisions)
-- **API Functions**:
-  - **api-scans**: Handles scan operations (list, get, upload URLs, video URLs, pending reviews)
-  - **api-users**: Manages user profiles and admin user operations
-- **S3 Bucket**: Stores uploaded videos (`raw/{userId}/`), transcripts, and scan reports (`reports/`)
-- **DynamoDB Table**: Single table design with:
-  - Callback tokens (with TTL: 24h for jobs, 3 days for approval)
-  - Scan results with GSI1 (user-based queries) and GSI2 (approval status queries)
-- **EventBridge Rules**: 
-  - S3 object creation events (triggers scanner)
-  - Transcribe job completion events (triggers callback)
-- **SNS Topic**: Rekognition job completion notifications
-- **AppSync Events API**: Real-time event publishing for frontend updates
-- **Cognito User Pool**: Authentication and authorization
-
-## Durable Function Workflow
-
-The Scanner function implements a fault-tolerant, 11-step workflow using AWS Lambda Durable Functions. Each step is automatically checkpointed, enabling recovery from any point and allowing the workflow to run for up to 7 days.
-
-### Step 0: Generate Scan ID
-```typescript
-const { scanId, uploadedAt } = await context.step('generate-scan-id', async () => ({
-  scanId: uuidv4(),
-  uploadedAt: new Date().toISOString(),
-}));
-```
-
-**What happens:**
-- Generates unique scanId (UUID) for tracking
-- Captures upload timestamp
-- Uses `context.step()` to ensure deterministic replay - same scanId on retries
-- Publishes SCAN_STARTED event to AppSync for real-time updates
-
-### Steps 1-4: Parallel Transcription and Rekognition
-
-The first major optimization runs transcription and video text detection in parallel, reducing total wait time by ~50%. Each parallel branch uses its own child context for deterministic replay.
-
-```typescript
-const parallelResults = await context.parallel([
-  // Branch 1: Transcription workflow
-  async (childContext) => {
-    const transcriptionResult = await childContext.waitForCallback(...)
-    const transcriptData = await childContext.step(...)
-    return transcriptData;
-  },
-  
-  // Branch 2: Rekognition workflow  
-  async (childContext) => {
-    const rekognitionResult = await childContext.waitForCallback(...)
-    const videoTextData = await childContext.step(...)
-    return { videoTextData, error: null };
-  }
-])
-```
-
-**Why Child Contexts Matter:**
-- Each parallel branch receives its own `childContext` parameter
-- All operations within a branch must use the child context (not the parent context)
-- Ensures deterministic replay when operations execute in different orders
-- Follows AWS Durable Execution SDK best practices
-
-#### Branch 1: Transcription Workflow
-
-**Step 1: Start Transcription Job**
-```typescript
-const transcriptionResult = await childContext.waitForCallback<string>(
-  'transcription-result',
-  async (callbackToken: string) => {
-    // Setup function - idempotent, not deterministic
-    await storeCallbackToken(scanId, jobName, callbackToken);
-    await transcribe.send(new StartTranscriptionJobCommand({
-      TranscriptionJobName: `transcribe-${Date.now()}-${scanId}`,
-      // ... configuration
-    }));
-  },
-  { timeout: { seconds: 1800 }, retryStrategy: CALLBACK_RETRY_STRATEGY }
-);
-```
-
-**What happens:**
-- Receives S3 object created event for videos in `raw/{userId}/` prefix
-- Generates unique job name with timestamp: `transcribe-${Date.now()}-${scanId}`
-- Stores callback token in DynamoDB with 24-hour TTL
-- Starts Amazon Transcribe job with job name as correlation ID
-- Function suspends (no compute charges) while waiting for transcription
-- Transcribe completion event triggers callback function via EventBridge
-- Callback function queries DynamoDB for token, sends result to durable execution
-- Function resumes with transcription job name
-
-**Setup Function Pattern:**
-- Setup functions are **idempotent, not deterministic**
-- Non-deterministic code (`Date.now()`, `uuidv4()`) is acceptable and often desired
-- If callback hasn't been received, setup runs again on replay - this is by design
-- Unique identifiers in job names prevent conflicts and allow safe retries
-
-**Step 2: Fetch Transcript from S3**
-```typescript
-const transcriptData = await childContext.step('fetch-transcript', async () => {
-  // Fetch complete job details
-  const job = await transcribe.send(new GetTranscriptionJobCommand({
-    TranscriptionJobName: transcriptionResult
-  }));
-  
-  // Parse transcript URI (supports s3:// and https:// formats)
-  const transcriptUri = job.TranscriptionJob?.Transcript?.TranscriptFileUri;
-  
-  // Fetch transcript JSON from S3
-  const transcriptJson = await s3.send(new GetObjectCommand({ ... }));
-  
-  // Extract full text and word-level timestamps
-  return { fullText, transcriptUri, transcriptionResult };
-});
-```
-
-**What happens:**
-- Fetches complete job details using GetTranscriptionJobCommand
-- Extracts transcript URI from job details
-- Parses the transcript URI (handles both S3 URI and HTTPS URL formats)
-- Fetches the transcript JSON file from S3
-- Extracts the full transcript text with timestamps
-- Returns text and metadata for next step
-- Publishes TRANSCRIPTION_COMPLETED event
-
-#### Branch 2: Rekognition Workflow
-
-**Step 3: Start Rekognition Text Detection**
-```typescript
-const rekognitionResult = await childContext.waitForCallback<string>(
-  'rekognition-result',
-  async (callbackToken: string) => {
-    // Setup function - idempotent, not deterministic
-    await storeCallbackToken(scanId, jobName, callbackToken);
-    await rekognition.send(new StartTextDetectionCommand({
-      Video: { S3Object: { Bucket, Name } },
-      NotificationChannel: {
-        SNSTopicArn: REKOGNITION_SNS_TOPIC_ARN,
-        RoleArn: REKOGNITION_ROLE_ARN
-      },
-      JobTag: `rekognition-${Date.now()}-${scanId}`
-    }));
-  },
-  { timeout: { seconds: 1800 }, retryStrategy: CALLBACK_RETRY_STRATEGY }
-);
-```
-
-**What happens:**
-- Stores callback token in DynamoDB with 24-hour TTL
-- Starts Rekognition text detection job on video
-- Configures SNS notification channel for job completion
-- Function suspends while waiting for text detection
-- Rekognition publishes to SNS when complete
-- SNS triggers callback function
-- Function resumes with job ID
-- Gracefully handles failures - continues with audio-only analysis
-
-**Step 4: Fetch Video Text Detections**
-```typescript
-const videoTextData = await childContext.step('fetch-video-text', async () => {
-  // Fetch all text detection results with pagination
-  let nextToken: string | undefined;
-  const allDetections: TextDetection[] = [];
-  
-  do {
-    const response = await rekognition.send(new GetTextDetectionCommand({
-      JobId: rekognitionResult,
-      NextToken: nextToken
-    }));
-    allDetections.push(...(response.TextDetections || []));
-    nextToken = response.NextToken;
-  } while (nextToken);
-  
-  // Filter by confidence >80% and deduplicate
-  const uniqueTexts = new Map<string, TextSegment>();
-  for (const detection of allDetections) {
-    if (detection.TextDetection?.Confidence && 
-        detection.TextDetection.Confidence > 80) {
-      // Deduplicate and store with timestamp
-    }
-  }
-  
-  return { textSegments, fullText, detectionCount };
-});
-```
-
-**What happens:**
-- Fetches all text detection results from Rekognition
-- Handles pagination for large result sets
-- Filters detections by confidence threshold (>80%)
-- Deduplicates text across frames
-- Returns unique text segments with timestamps and bounding boxes
-- Publishes REKOGNITION_COMPLETED event
-
-**Parallel Execution Benefits:**
-- Both workflows run concurrently instead of sequentially
-- Total wait time reduced by approximately 50%
-- Results merge before corpus building (Step 5)
-- Maintains error handling for Rekognition failures (continues with audio-only)
-
-### Step 5: Build Combined Corpus
-```typescript
-const corpusData = await context.step('build-corpus', async () => {
-  // Combine audio transcript words with video text detections
-  const combinedText = transcriptData.fullText + '\n\n' + (videoTextData?.fullText || '');
-  
-  // Create position index mapping each character to its source
-  const positionIndex: Array<'audio' | 'screen'> = [];
-  // ... map each character position to audio or screen
-  
-  return { combinedText, positionIndex };
-});
-```
-
-**What happens:**
-- Combines transcript words with video text detections
-- Creates position index mapping each character to its source (audio/screen)
-- Preserves timestamps for temporal analysis
-- Enables source-level issue tracking in later steps
-
-### Step 6: Parallel Content Analysis
-```typescript
-const analysisResults = await context.parallel([
-  async () => analyzeToxicity(corpusData.combinedText),
-  async () => analyzeSentiment(corpusData.combinedText),
-  async () => detectPII(corpusData.combinedText)
-]);
-```
-
-**What happens:**
-All three analyses run concurrently on the combined corpus using Amazon Comprehend. Unlike Steps 1-4, these don't need child contexts because they don't use `waitForCallback()`.
-
-#### Toxicity Detection
-- Detects 7 types of toxic content:
-  - PROFANITY, HATE_SPEECH, INSULT, GRAPHIC
-  - HARASSMENT_OR_ABUSE, SEXUAL, VIOLENCE_OR_THREAT
-- Handles large texts by chunking (100KB limit per request)
-- Returns confidence scores for each category
-- Flags content as toxic if any score > 0.5
-
-#### Sentiment Analysis
-- Analyzes overall emotional tone
-- Returns sentiment: POSITIVE, NEGATIVE, NEUTRAL, or MIXED
-- Provides confidence scores for each sentiment type
-- Analyzes first 5KB if text exceeds limit
-
-#### PII Detection
-- Detects personally identifiable information:
-  - Names, Phone numbers, Email addresses
-  - Credit card numbers, SSNs, Addresses
-  - And more
-- Groups entities by type for easy summary
-- Returns count, types, and locations of all PII found
-- Analyzes first 100KB if text exceeds limit
-
-**Publishes ANALYSIS_COMPLETED event after all three complete**
-
-### Step 7: Map Results to Sources
-```typescript
-const mappedResults = await context.step('map-to-sources', async () => {
-  // Map each PII entity back to audio or screen source
-  const piiBySource = { audio: [], screen: [] };
-  
-  for (const entity of piiResults.entities) {
-    const source = positionIndex[entity.BeginOffset];
-    piiBySource[source].push(entity);
-  }
-  
-  return { pii: piiBySource, summary: { audio: {...}, screen: {...} } };
-});
-```
-
-**What happens:**
-- Maps each detected PII entity to its source (audio/screen)
-- Uses position index from Step 5 to determine origin
-- Creates summary showing issues per source
-- Enables targeted content moderation
-
-### Step 8: Generate AI Summary
-```typescript
-const aiSummary = await context.step('generate-summary', async () => {
-  // Build structured prompt with all findings
-  const prompt = `Analyze this video content scan...
-    Toxicity: ${JSON.stringify(toxicityResults)}
-    Sentiment: ${sentimentResults.sentiment}
-    PII: ${piiResults.entityCount} entities found
-    ...`;
-  
-  // Call Amazon Bedrock Nova Lite
-  const response = await bedrock.send(new InvokeModelCommand({
-    modelId: 'global.amazon.nova-2-lite-v1:0',
-    body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] })
-  }));
-  
-  return { summary, modelId, generatedAt };
-});
-```
-
-**What happens:**
-- Constructs comprehensive prompt with all findings
-- Calls Amazon Bedrock Nova Lite for cost-effective summarization
-- Generates 3-4 sentence executive summary
-- Provides overall safety assessment (Safe/Caution/Unsafe)
-- Highlights critical findings and recommendations
-- Falls back gracefully if AI generation fails
-
-### Step 9: Save Results
-```typescript
-const scanRecord = await context.step('save-results', async () => {
-  // Determine overall assessment
-  let overallAssessment: 'SAFE' | 'CAUTION' | 'UNSAFE' = 'SAFE';
-  if (toxicityResults.hasToxicContent || piiResults.hasPII) {
-    overallAssessment = 'UNSAFE';
-  } else if (sentimentResults.sentiment === 'NEGATIVE' || 
-             sentimentResults.sentiment === 'MIXED') {
-    overallAssessment = 'CAUTION';
-  }
-  
-  // Save JSON report to S3
-  await s3.send(new PutObjectCommand({
-    Bucket: bucketName,
-    Key: `reports/${scanId}.json`,
-    Body: JSON.stringify(completeResult, null, 2)
-  }));
-  
-  // Save metadata to DynamoDB
-  await ddb.send(new PutItemCommand({
-    TableName: SCANNER_TABLE,
-    Item: marshall({
-      PK: `SCAN#${scanId}`,
-      SK: 'METADATA',
-      GSI1PK: `USER#${userId}`,
-      GSI1SK: uploadedAt,
-      GSI2PK: 'STATUS#PENDING_REVIEW',
-      GSI2SK: uploadedAt,
-      approvalStatus: 'PENDING_REVIEW',
-      // ... all scan metadata
-    })
-  }));
-  
-  return { scanId, userId, uploadedAt, jsonReportKey, overallAssessment };
-});
-```
-
-**What happens:**
-- Generates unique scanId (UUID)
-- Extracts userId from object key (`raw/{userId}/{filename}`)
-- Determines overall assessment (SAFE/CAUTION/UNSAFE)
-- Saves complete JSON report to S3 (`reports/{scanId}.json`)
-- Stores metadata in DynamoDB with:
-  - GSI1 (user-based index): `USER#${userId}` for querying user's videos
-  - GSI2 (approval status index): `STATUS#PENDING_REVIEW` for reviewer workflows
-  - Sets initial status to PENDING_REVIEW
-- Publishes REPORT_GENERATED and PENDING_REVIEW events
-
-### Step 10: Wait for Human Approval (3-Day Timeout)
-```typescript
-const approvalResult = await context.waitForCallback<ApprovalResult>(
-  'human-approval',
-  async (callbackToken: string) => {
-    // Store callback token in DynamoDB with 3-day TTL
-    await ddb.send(new PutItemCommand({
-      TableName: SCANNER_TABLE,
-      Item: marshall({
-        PK: `SCAN#${scanId}`,
-        SK: 'TOKEN#approval',
-        callbackToken,
-        ttl: Math.floor(Date.now() / 1000) + 259200 // 3 days
-      })
-    }));
-  },
-  { timeout: { seconds: 259200 } } // 3 days
-);
-```
-
-**What happens:**
-- Stores approval callback token in DynamoDB with 3-day TTL
-- Function suspends (no compute charges) waiting for human decision
-- Reviewer can approve or reject via `POST /approval` API endpoint
-- If no decision within 3 days, automatically rejects
-- Callback function sends decision back to durable execution
-- Function resumes with approval result
-
-**Approval Event Format:**
-```json
-{
-  "scanId": "uuid-here",
-  "approved": true,
-  "reviewedBy": "reviewer@example.com",
-  "comments": "Content looks good"
-}
-```
-
-**Timeout Handling:**
-- After 3 days without approval, automatically rejects
-- Sets `reviewedBy: "system"` and adds timeout comment
-- Ensures videos don't remain in pending state indefinitely
-
-### Step 11: Update Final Approval Status
-```typescript
-const finalStatus = await context.step('update-approval-status', async () => {
-  const finalApprovalStatus = approvalResult.approved ? 'APPROVED' : 'REJECTED';
-  
-  // Update DynamoDB record
-  await ddb.send(new PutItemCommand({
-    TableName: SCANNER_TABLE,
-    Item: marshall({
-      PK: `SCAN#${scanId}`,
-      SK: 'METADATA',
-      GSI2PK: `STATUS#${finalApprovalStatus}`, // Update status index
-      GSI2SK: uploadedAt,
-      approvalStatus: finalApprovalStatus,
-      reviewedBy: approvalResult.reviewedBy,
-      reviewedAt: approvalResult.reviewedAt,
-      reviewComments: approvalResult.comments,
-      // ... all previous scan data
-    })
-  }));
-  
-  return { approvalStatus: finalApprovalStatus, ... };
-});
-```
-
-**What happens:**
-- Updates DynamoDB record with final status (APPROVED/REJECTED)
-- Updates GSI2 index from `STATUS#PENDING_REVIEW` to `STATUS#APPROVED` or `STATUS#REJECTED`
-- Adds reviewer information (reviewedBy, reviewedAt, comments)
-- Maintains all previous scan data
-- Enables querying by approval status for reporting
-- Publishes APPROVED or REJECTED event
-
-### Final Result Structure
-
-```json
-{
-  "scanId": "uuid-here",
-  "userId": "user123",
-  "objectKey": "raw/user123/video.mp4",
-  "objectSize": 12345,
-  "overallAssessment": "CAUTION",
-  "status": "completed",
-  "approvalStatus": "APPROVED",
-  "reviewedBy": "reviewer@example.com",
-  "reviewedAt": "2026-01-24T12:00:00.000Z",
-  "reviewComments": "Content looks good",
-  "reportS3Key": "reports/uuid-here.json",
-  "aiSummary": "This video contains moderate concerns...",
-  "warnings": []
-}
-```
+- 🟣 Purple: Parallel execution points
+- 🟡 Yellow: Suspension points (function pauses, state saved)
+- 🔴 Pink: AI processing (Bedrock)
+- 🟢 Green: Workflow completion
 
 ## Key Features
 
@@ -622,23 +188,33 @@ const finalStatus = await context.step('update-approval-status', async () => {
 - **Long-Running Workflows**: Can run for up to 7 days with automatic state management
 - **No Compute Charges During Waits**: Function suspends while waiting for Transcribe/Rekognition/Approval
 - **Fault Tolerance**: Automatic retry and recovery from failures
-- **Parallel Execution**: Multiple operations run concurrently for faster results (Steps 1-4 and Step 6)
+- **Parallel Execution**: Multiple operations run concurrently for faster results
 - **Child Context Pattern**: Proper use of child contexts in parallel branches ensures deterministic replay
 - **Human-in-the-Loop**: 3-day approval timeout with automatic rejection fallback
-- **Configurable Timeouts**: 30-minute callback timeouts for jobs, 3-day timeout for human approval
+
+### Real-Time Progress Visualization
+- **Git-Style Fork/Merge UI**: Visual representation of parallel execution branches
+- **Live Status Updates**: Real-time progress events via AppSync Events API
+- **Multi-Branch Tracking**: Simultaneous display of parallel operations
+- **Color-Coded Branches**: Each workflow branch has distinct color shading
+  - Transcription: Purple (purple-400 → purple-600)
+  - Rekognition: Indigo (indigo-400 → indigo-600)
+  - Toxicity: Orange (orange-400 → orange-600)
+  - Sentiment: Emerald (emerald-400 → emerald-600)
+  - PII: Rose (rose-400 → rose-600)
+- **Status History**: Complete tracking of all workflow states
 
 ### Multi-Source Analysis
-- **Audio Transcription**: Full speech-to-text with timestamps
-- **Video Text Detection**: OCR for on-screen text with confidence filtering
+- **Audio Transcription**: Full speech-to-text with timestamps via Amazon Transcribe
+- **Video Text Detection**: OCR for on-screen text via Amazon Rekognition
 - **Combined Corpus**: Unified analysis of both audio and visual content
 - **Source Mapping**: Track which issues come from audio vs screen
 
 ### Content Analysis
-- **Comprehensive Safety Checks**: Toxicity detection for content moderation
-- **Emotional Intelligence**: Sentiment analysis for understanding tone
-- **Privacy Protection**: PII detection for compliance and data protection
-- **Scalable**: Handles large transcripts with automatic chunking
-- **Source-Level Breakdown**: Separate audio and screen issue tracking
+- **Toxicity Detection**: Content moderation via Amazon Comprehend
+- **Sentiment Analysis**: Emotional tone understanding
+- **PII Detection**: Privacy protection and compliance
+- **Scalable Processing**: Handles large transcripts with automatic chunking
 
 ### AI-Powered Insights
 - **Executive Summaries**: Amazon Bedrock Nova Lite generates concise summaries
@@ -646,12 +222,139 @@ const finalStatus = await context.step('update-approval-status', async () => {
 - **Actionable Recommendations**: Clear guidance for content moderation
 - **Cost-Effective**: Uses Nova Lite for optimal price-performance
 
-### Reporting & Storage
-- **JSON Reports**: Complete detailed analysis in machine-readable format
-- **HTML Reports**: Beautiful, color-coded reports for human review
-- **DynamoDB Metadata**: Fast queries by user or approval status
-- **User-Based Access**: Multi-user support with userId extraction
-- **Approval Workflow**: Built-in PENDING_REVIEW status for manual review
+## Workflow Steps
+
+### Step 0: Initialize Scan
+- Generate unique scan ID (UUID)
+- Create timestamp
+- Publish `SCAN_STARTED` event
+
+### Step 1: Parallel Media Processing
+**Branch 1 - Transcription:**
+1. Start Amazon Transcribe job
+2. Store callback token in DynamoDB (24h TTL)
+3. Publish `TRANSCRIPTION_STARTED` event
+4. ⏸️ Suspend and wait for callback (30 min timeout)
+5. Fetch transcript from S3
+6. Publish `TRANSCRIPTION_COMPLETED` event
+
+**Branch 2 - Rekognition:**
+1. Start Amazon Rekognition text detection job
+2. Store callback token in DynamoDB (24h TTL)
+3. Publish `REKOGNITION_STARTED` event
+4. ⏸️ Suspend and wait for callback (30 min timeout)
+5. Extract detected text with confidence filtering
+6. Publish `REKOGNITION_COMPLETED` event
+
+### Step 2: Build Combined Corpus
+- Merge audio transcript and video text
+- Create position index for source mapping
+- Publish `BUILDING_CORPUS` event
+
+### Step 3: Parallel Content Analysis
+**Branch 3 - Toxicity:**
+1. Publish `TOXICITY_STARTED` event
+2. Detect toxic content via Comprehend
+3. Publish `TOXICITY_COMPLETED` event
+
+**Branch 4 - Sentiment:**
+1. Publish `SENTIMENT_STARTED` event
+2. Analyze sentiment via Comprehend
+3. Publish `SENTIMENT_COMPLETED` event
+
+**Branch 5 - PII:**
+1. Publish `PII_STARTED` event
+2. Detect PII entities via Comprehend
+3. Publish `PII_COMPLETED` event
+
+### Step 4: Map Results to Sources
+- Identify which issues came from audio vs screen
+- Create source-level breakdown
+- Publish `ANALYSIS_COMPLETED` event
+
+### Step 5: Generate AI Summary
+- Publish `GENERATING_SUMMARY` event
+- Use Amazon Bedrock Nova Lite to generate executive summary
+- Determine overall safety assessment
+
+### Step 6: Save Results
+- Save JSON report to S3
+- Save HTML report to S3
+- Save metadata to DynamoDB
+- Publish `REPORT_GENERATED` event
+
+### Step 7: Human Approval
+- Publish `PENDING_REVIEW` event (goes to user and admin channels)
+- Store approval callback token (3 day TTL)
+- ⏸️ Suspend and wait for approval (3 day timeout)
+- On approval: Publish `APPROVED` event
+- On rejection: Publish `REJECTED` event
+- On timeout: Auto-reject and publish `REJECTED` event
+
+## Components
+
+### Lambda Functions
+
+**Scanner Function (Durable)**
+- Main orchestrator implementing the complete workflow
+- Uses child contexts for parallel execution
+- Publishes 15+ event types for real-time UI updates
+- Handles all suspension points and callbacks
+
+**Callback Function**
+- Unified handler for three callback sources:
+  - EventBridge (Transcribe completion)
+  - SNS (Rekognition completion)
+  - API Gateway (Human approval/rejection)
+- Resumes durable function execution
+- Validates callback tokens
+
+**API Functions**
+- `api-scans`: Scan operations (list, get, upload URLs, video URLs, pending reviews)
+- `api-users`: User profile and admin operations
+
+### Storage
+
+**S3 Bucket**
+- `raw/{userId}/`: Uploaded videos
+- `reports/`: JSON and HTML scan reports
+- `transcripts/`: Transcribe output files
+
+**DynamoDB Tables**
+- Callback tokens with TTL (24h for jobs, 3 days for approval)
+- Scan results with GSI1 (user queries) and GSI2 (approval status queries)
+
+### Event Sources
+
+**EventBridge Rules**
+- S3 object creation → triggers Scanner
+- Transcribe job completion → triggers Callback
+
+**SNS Topic**
+- Rekognition job completion → triggers Callback
+
+**AppSync Events API**
+- Real-time event publishing to frontend
+- User-specific channels: `/default/scan-updates-{userId}`
+- Admin channel: `/default/admin-pending-reviews`
+
+### Authentication
+- Cognito User Pool for user authentication
+- JWT token validation in API functions
+
+## Frontend
+
+### Nuxt.js Dashboard
+- Real-time progress visualization
+- Git-style fork/merge UI for parallel execution
+- Color-coded status badges
+- Video playback with scan results
+- Admin panel for pending reviews
+
+### Real-Time Updates
+- AppSync Events API integration
+- Automatic UI updates as workflow progresses
+- Status history tracking for accurate visualization
 
 ## Deployment
 
@@ -659,398 +362,171 @@ const finalStatus = await context.step('update-approval-status', async () => {
 - AWS SAM CLI installed
 - AWS credentials configured
 - Node.js 24.x runtime
+- Docker (for local testing)
 
-### Deploy with SAM Sync
+### Deploy Backend
 ```bash
+# Deploy with auto-sync
 sam sync --watch
+
+# Or traditional deployment
+sam build
+sam deploy --guided
 ```
 
-This command:
-- Builds the Lambda functions
-- Deploys infrastructure changes
-- Watches for code changes and auto-deploys
+### Deploy Frontend
+```bash
+cd frontend
+npm install
+npm run dev  # Local development
+npm run build  # Production build
+```
+
+### Configuration
+Update `frontend/.env`:
+```
+NUXT_PUBLIC_API_ENDPOINT=https://your-api-gateway-url
+NUXT_PUBLIC_COGNITO_USER_POOL_ID=your-pool-id
+NUXT_PUBLIC_COGNITO_CLIENT_ID=your-client-id
+NUXT_PUBLIC_APPSYNC_HTTP_ENDPOINT=your-appsync-http-url
+NUXT_PUBLIC_APPSYNC_REALTIME_ENDPOINT=your-appsync-realtime-url
+```
+
+## Usage
 
 ### Upload a Video
 ```bash
-aws s3 cp video.mp4 s3://YOUR-BUCKET-NAME/raw/user123/video.mp4
+# Via CLI
+aws s3 cp video.mp4 s3://YOUR-BUCKET/raw/USER_ID/video.mp4
+
+# Via UI
+# Use the dashboard upload interface
 ```
 
-The workflow automatically triggers when a file is uploaded to the `raw/{userId}/` prefix. The userId is extracted from the path for multi-user support.
+### Monitor Progress
+- Watch real-time updates in the dashboard
+- See parallel branches execute simultaneously
+- Track status through fork/merge visualization
 
-### Approve or Reject a Video
-After the scan completes, the video enters PENDING_REVIEW status and waits for human approval. To approve or reject:
-
+### Approve or Reject
 ```bash
-# Approve a video
-aws lambda invoke \
-  --function-name callback-function \
-  --payload '{"scanId":"YOUR-SCAN-ID","approved":true,"reviewedBy":"reviewer@example.com","comments":"Looks good"}' \
-  response.json
+# Get pending reviews
+aws dynamodb query \
+  --table-name scanner-table \
+  --index-name GSI2 \
+  --key-condition-expression "GSI2PK = :pk" \
+  --expression-attribute-values '{":pk":{"S":"APPROVAL#PENDING"}}'
 
-# Reject a video
-aws lambda invoke \
-  --function-name callback-function \
-  --payload '{"scanId":"YOUR-SCAN-ID","approved":false,"reviewedBy":"reviewer@example.com","comments":"Contains inappropriate content"}' \
-  response.json
+# Approve via SAM CLI
+sam remote callback succeed TOKEN \
+  --result '{"approved":true,"reviewedBy":"admin@example.com","comments":"Looks good"}'
+
+# Reject via SAM CLI
+sam remote callback succeed TOKEN \
+  --result '{"approved":false,"reviewedBy":"admin@example.com","comments":"Issues found"}'
+
+# Or use the admin dashboard UI
 ```
-
-**Note**: If no approval decision is made within 3 days, the video is automatically rejected with `reviewedBy: "system"`.
 
 ## Monitoring
 
 ### CloudWatch Logs
-Each function logs detailed information:
-- Scanner function: `/aws/lambda/scanner-function`
-- Unified callback: `/aws/lambda/callback-function`
-
-### Key Log Events
-- Transcription job started
-- Rekognition text detection started
-- Callback tokens stored/retrieved
-- Transcript and video text fetched
-- Corpus built with source mapping
-- Parallel analysis started
-- Individual analysis results
-- AI summary generated
-- Reports saved to S3 and DynamoDB
-- Final workflow completion with full result
+- Scanner function: `/aws/lambda/scanner-app-ScannerFunction-*`
+- Callback function: `/aws/lambda/scanner-app-CallbackFunction-*`
+- API functions: `/aws/lambda/scanner-app-API*Function-*`
 
 ### X-Ray Tracing
 All functions have X-Ray tracing enabled for distributed tracing and performance analysis.
 
-## Resources Created
-
-- **Lambda Functions**: 2 (Scanner, Unified Callback)
-- **S3 Bucket**: 1 (with EventBridge notifications enabled)
-- **DynamoDB Tables**: 2 (callback tokens with TTL, scan results with GSIs)
-- **SNS Topic**: 1 (Rekognition job notifications)
-- **IAM Roles**: Automatically created with least-privilege permissions
-- **EventBridge Rules**: 2 (S3 object created, Transcribe job completion)
+### Key Metrics
+- Workflow duration
+- Parallel execution timing
+- Callback response times
+- Approval wait times
+- Error rates by step
 
 ## Cost Optimization
 
 - **Durable Functions**: No compute charges during waits (can be hours/days)
 - **ARM64 Architecture**: Better price-performance ratio
-- **Pay-per-use**: Only charged for actual processing time
 - **Parallel Execution**: Faster results, less total execution time
+- **Pay-per-use**: Only charged for actual processing time
+- **Nova Lite**: Cost-effective AI model for summaries
 
 ## Security
 
-- **Encryption**: DynamoDB encryption at rest, S3 encryption
+- **Encryption**: DynamoDB and S3 encryption at rest
 - **IAM Policies**: Least-privilege access using SAM policy templates
-- **VPC**: Can be deployed in VPC for additional isolation
-- **Secrets**: Callback tokens stored securely in DynamoDB with TTL
+- **Cognito Authentication**: Secure user authentication
+- **Callback Token Validation**: Prevents unauthorized workflow resumption
+- **TTL on Tokens**: Automatic cleanup of expired tokens
 
 ## Development
-
-### Dependency Management
-
-Use the Makefile to manage dependencies across all Lambda functions:
-
-```bash
-# Clean and install all dependencies
-make
-
-# Or explicitly
-make install
-```
-
-This will:
-- Remove `node_modules` and `package-lock.json` from all function folders
-- Run `npm install` in each folder with a `package.json`
 
 ### Project Structure
 ```
 .
 ├── src/
-│   ├── scanner/              # Durable function orchestrator
-│   │   ├── index.ts
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   └── callback/             # Unified callback handler
-│       ├── index.ts          # Handles Transcribe, Rekognition, and Approval
-│       ├── package.json
-│       └── tsconfig.json
-├── Makefile                  # Dependency management
-├── template.yaml             # SAM template
-└── samconfig.toml           # SAM configuration
+│   ├── scanner/              # Durable orchestrator
+│   ├── callback/             # Unified callback handler
+│   ├── api-scans/           # Scan API
+│   └── api-users/           # User API
+├── frontend/                 # Nuxt.js dashboard
+│   ├── pages/
+│   ├── components/
+│   └── composables/
+├── template.yaml            # SAM template
+├── samconfig.toml          # SAM configuration
+└── Makefile                # Dependency management
 ```
 
 ### Local Testing
 ```bash
-# Invoke scanner function locally
+# Invoke scanner locally
 sam local invoke ScannerFunction -e events/s3-event.json
 
 # Start local API
 sam local start-api
+
+# Run frontend locally
+cd frontend && npm run dev
 ```
 
 ## Troubleshooting
 
-### Transcription Timeout
-- Default callback timeout: 10 minutes
-- Adjust in `CALLBACK_CONFIG.timeoutSeconds` if needed
-
-### Large Transcript Handling
-- Toxicity: Automatically chunks at 100KB
-- Sentiment: Analyzes first 5KB
-- PII: Analyzes first 100KB
-
-### Callback Token Not Found
-- Check DynamoDB table for token
-- Verify TTL hasn't expired (24 hours)
-- Check EventBridge rule is triggering callback function
-
-## Complete Deployment Guide
-
-### Prerequisites
-
-Before deploying, ensure you have:
-
-- **AWS SAM CLI** installed ([installation guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html))
-- **AWS credentials** configured with appropriate permissions
-- **Node.js 24.x** installed for local development
-- **An email address** for the initial admin user
-
-### Backend Deployment
-
-#### 1. Deploy the SAM Application
-
-The application requires an admin email address as a parameter. This will create the initial admin user in Cognito:
-
-```bash
-sam deploy --parameter-overrides AdminEmail=your-email@example.com
-```
-
-**What happens:**
-- CloudFormation creates all AWS resources (Lambda, S3, DynamoDB, Cognito, etc.)
-- An admin user is created in the Cognito User Pool
-- **You will receive an email** with a temporary password at the provided email address
-- The temporary password must be changed on first login
-
-**Important Notes:**
-- The admin email must be a valid email address you can access
-- Check your spam folder if you don't receive the temporary password email
-- The temporary password expires after 7 days
-- You'll be prompted to change it when you first log in to the frontend
-
-#### 2. Get Stack Outputs
-
-After deployment completes, retrieve the stack outputs which contain all the configuration values needed for the frontend:
-
-```bash
-aws cloudformation describe-stacks \
-  --stack-name scanner-app \
-  --query 'Stacks[0].Outputs' \
-  --output table
-```
-
-Or get the complete `.env` file content directly:
-
-```bash
-aws cloudformation describe-stacks \
-  --stack-name scanner-app \
-  --query 'Stacks[0].Outputs[?OutputKey==`FrontendEnvFile`].OutputValue' \
-  --output text
-```
-
-**Key Outputs:**
-- `ApiEndpoint` - REST API URL for backend operations
-- `UserPoolId` - Cognito User Pool ID for authentication
-- `UserPoolClientId` - Cognito App Client ID
-- `AppSyncHttpEndpoint` - AppSync Events API for real-time updates
-- `AppSyncRealtimeEndpoint` - WebSocket endpoint for subscriptions
-- `Region` - AWS region where resources are deployed
-- `FrontendEnvFile` - Complete `.env` file content ready to copy
-
-### Frontend Setup
-
-#### 1. Navigate to Frontend Directory
-
-```bash
-cd frontend
-```
-
-#### 2. Configure Environment Variables
-
-Create a `.env` file in the `frontend/` directory using the stack outputs:
-
-```bash
-# Copy the FrontendEnvFile output directly
-aws cloudformation describe-stacks \
-  --stack-name scanner-app \
-  --query 'Stacks[0].Outputs[?OutputKey==`FrontendEnvFile`].OutputValue' \
-  --output text > .env
-```
-
-Or manually create `frontend/.env` with the following format:
-
-```env
-NUXT_PUBLIC_API_ENDPOINT=https://your-api-id.execute-api.us-west-2.amazonaws.com/prod
-NUXT_PUBLIC_USER_POOL_ID=us-west-2_xxxxxxxxx
-NUXT_PUBLIC_USER_POOL_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
-NUXT_PUBLIC_APPSYNC_HTTP_ENDPOINT=https://xxx.appsync-api.us-west-2.amazonaws.com/event
-NUXT_PUBLIC_APPSYNC_REALTIME_ENDPOINT=wss://xxx.appsync-realtime-api.us-west-2.amazonaws.com/event/realtime
-NUXT_PUBLIC_REGION=us-west-2
-```
-
-Replace the placeholder values with the actual outputs from your stack.
-
-#### 3. Install Dependencies
-
-```bash
-npm install
-```
-
-#### 4. Run Development Server
-
-```bash
-npm run dev
-```
-
-The frontend will be available at `http://localhost:3000`
-
-#### 5. First Login
-
-1. Navigate to `http://localhost:3000`
-2. Click "Sign In"
-3. Enter the admin email address you provided during deployment
-4. Enter the temporary password from the email
-5. You'll be prompted to set a new permanent password
-6. After changing the password, you'll be logged in as an admin user
-
-### User Management
-
-#### Admin Capabilities
-
-As an admin user, you can:
-
-- **Invite new users** via the Admin panel
-- **View all users** in the system
-- **Delete users** (except yourself)
-- **Review pending scans** from all users
-- **Approve or reject** video content
-
-#### Inviting New Users
-
-1. Log in as an admin user
-2. Navigate to the Admin panel (Admin → Users)
-3. Click "Invite User"
-4. Enter the new user's email address
-5. The user will receive an email with a temporary password
-6. They can log in and change their password on first access
-
-**User Roles:**
-- **Admin**: Full access to all features, user management, and all scans
-- **Regular User**: Can upload videos, view their own scans, but cannot access admin features
-
-#### User Workflow
-
-Regular users can:
-1. Upload videos through the dashboard
-2. View real-time processing updates via AppSync Events
-3. See their scan history
-4. View detailed scan reports
-5. Check approval status (Pending/Approved/Rejected)
-
-### Development Workflow
-
-#### Using SAM Sync for Rapid Development
-
-For faster iteration during development, use `sam sync` instead of `sam deploy`:
-
-```bash
-sam sync --watch
-```
-
-This command:
-- Watches for code changes in Lambda functions
-- Automatically rebuilds and deploys changes
-- Skips CloudFormation for code-only updates (much faster)
-- Ideal for active development
-
-**Note:** Infrastructure changes (new resources, IAM policies, etc.) still require `sam deploy`
-
-#### Testing Video Upload
-
-Upload a test video to trigger the workflow:
-
-```bash
-aws s3 cp your-video.mp4 \
-  s3://YOUR-BUCKET-NAME/raw/YOUR-USER-ID/video.mp4 \
-  --profile demo
-```
-
-Replace:
-- `YOUR-BUCKET-NAME` with the S3 bucket name from stack outputs
-- `YOUR-USER-ID` with the Cognito user's sub (UUID)
-
-#### Viewing Logs
-
-View Lambda function logs:
-
-```bash
-# Scanner function logs
-sam logs --stack-name scanner-app --name ScannerFunction --tail
-
-# Callback function logs
-sam logs --stack-name scanner-app --name CallbackFunction --tail
-
-# API functions logs
-sam logs --stack-name scanner-app --name ApiScansFunction --tail
-sam logs --stack-name scanner-app --name ApiUsersFunction --tail
-```
-
-#### Manual Approval Testing
-
-For testing the approval workflow without the frontend:
-
-```bash
-# Approve a scan
-sam remote callback succeed YOUR-CALLBACK-TOKEN \
-  --result '{"approved":true,"reviewedBy":"admin@example.com","comments":"Content looks good"}' \
-  --profile demo
-
-# Reject a scan
-sam remote callback succeed YOUR-CALLBACK-TOKEN \
-  --result '{"approved":false,"reviewedBy":"admin@example.com","comments":"Inappropriate content"}' \
-  --profile demo
-```
-
-The callback token is stored in DynamoDB and logged during workflow execution.
-
-### Production Deployment
-
-For production deployments:
-
-1. **Use a custom domain** for the API Gateway
-2. **Enable CloudFront** for the frontend
-3. **Configure proper CORS** origins (remove `'*'`)
-4. **Set up CloudWatch alarms** for error rates and latency
-5. **Enable AWS WAF** for API protection
-6. **Use AWS Secrets Manager** for sensitive configuration
-7. **Implement proper backup** strategies for DynamoDB
-8. **Configure VPC** for Lambda functions if required
-9. **Set up CI/CD pipeline** for automated deployments
-
-### Cleanup
-
-To remove all resources:
-
-```bash
-sam delete --stack-name scanner-app
-```
-
-This will delete:
-- All Lambda functions
-- S3 bucket (must be empty first)
-- DynamoDB tables
-- Cognito User Pool
-- API Gateway
-- All other created resources
-
-**Warning:** This action cannot be undone. Make sure to backup any important data first.
+### Workflow Not Starting
+- Check EventBridge rule is enabled
+- Verify S3 bucket has EventBridge notifications enabled
+- Check Scanner function logs
+
+### Callback Not Received
+- Verify callback token exists in DynamoDB
+- Check token hasn't expired (TTL)
+- Verify EventBridge/SNS subscriptions
+- Check Callback function logs
+
+### UI Not Updating
+- Verify AppSync Events API configuration
+- Check browser console for WebSocket errors
+- Verify Cognito authentication token is valid
+
+### Analysis Failures
+- Check Comprehend service limits
+- Verify text length is within limits
+- Check IAM permissions for Comprehend
+
+## Resources Created
+
+- **Lambda Functions**: 5 (Scanner, Callback, API Scans, API Users, AppSync Authorizer)
+- **S3 Bucket**: 1 (with EventBridge notifications)
+- **DynamoDB Table**: 1 (with 2 GSIs)
+- **SNS Topic**: 1 (Rekognition notifications)
+- **EventBridge Rules**: 2 (S3 events, Transcribe completion)
+- **AppSync Events API**: 1 (Real-time updates)
+- **Cognito User Pool**: 1 (Authentication)
+- **API Gateway**: 1 (REST API)
+- **IAM Roles**: Auto-created with least-privilege
 
 ## License
 
-Apache 2.0
+MIT
