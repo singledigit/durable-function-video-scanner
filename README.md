@@ -12,42 +12,22 @@ This application automatically processes video files uploaded to S3, performing 
 
 ```mermaid
 graph TB
-    subgraph "Frontend"
-        UI[Nuxt.js Dashboard]
-        AppSync[AppSync Events API]
-    end
-    
-    subgraph "API Layer"
-        APIGW[API Gateway]
-        APIScans[api-scans Lambda]
-        APIUsers[api-users Lambda]
-    end
-    
-    subgraph "Authentication"
-        Cognito[Cognito User Pool]
-    end
-    
-    subgraph "Storage"
-        S3[S3 Bucket<br/>Videos & Reports]
-        DDB[(DynamoDB<br/>Scans & Tokens)]
-    end
-    
-    subgraph "Orchestration"
-        Scanner[Scanner Function<br/>Durable Orchestrator]
-        Callback[Callback Function<br/>Unified Handler]
-    end
-    
-    subgraph "AWS AI Services"
-        Transcribe[Amazon Transcribe]
-        Rekognition[Amazon Rekognition]
-        Comprehend[Amazon Comprehend]
-        Bedrock[Amazon Bedrock<br/>Nova Lite]
-    end
-    
-    subgraph "Event Sources"
-        EventBridge[EventBridge]
-        SNS[SNS Topic]
-    end
+    UI[Nuxt.js Dashboard]
+    AppSync[AppSync Events API]
+    APIGW[API Gateway]
+    APIScans[api-scans Lambda]
+    APIUsers[api-users Lambda]
+    Cognito[Cognito User Pool]
+    S3[S3 Bucket<br/>Videos & Reports]
+    DDB[(DynamoDB<br/>Scans & Tokens)]
+    Scanner[Scanner Function<br/>Durable Orchestrator]
+    Callback[Callback Function<br/>Unified Handler]
+    Transcribe[Amazon Transcribe]
+    Rekognition[Amazon Rekognition]
+    Comprehend[Amazon Comprehend]
+    Bedrock[Amazon Bedrock<br/>Nova Lite]
+    EventBridge[EventBridge]
+    SNS[SNS Topic]
     
     UI -->|Auth| Cognito
     UI -->|API Calls| APIGW
