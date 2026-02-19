@@ -36,6 +36,13 @@ export const useApi = () => {
     return apiCall(`/scans/${scanId}`);
   };
 
+  const getVideoUrl = async (scanId: string, objectKey: string) => {
+    return apiCall(`/scans/${scanId}/video-url`, {
+      method: 'POST',
+      body: JSON.stringify({ objectKey }),
+    });
+  };
+
   const listPending = async () => {
     return apiCall('/admin/scans/pending');
   };
@@ -84,6 +91,7 @@ export const useApi = () => {
     uploadVideo,
     listScans,
     getScan,
+    getVideoUrl,
     listPending,
     approveScan,
     getProfile,

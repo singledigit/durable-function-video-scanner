@@ -135,7 +135,7 @@ definePageMeta({ middleware: 'auth' });
 const route = useRoute();
 const router = useRouter();
 const { isAdmin } = useAuth();
-const { getScan, approveScan } = useApi();
+const { getScan, approveScan, getVideoUrl } = useApi();
 
 const scanId = route.params.id as string;
 const scan = ref<any>(null);
@@ -160,19 +160,11 @@ const loadScan = async () => {
     
     // Get presigned URL for video
     if (scan.value.objectKey) {
-      const response = await fetch(`${config.public.apiEndpoint}/scans/${route.params.id}/video-url`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': await getIdToken()
-        },
-        body: JSON.stringify({ objectKey: scan.value.objectKey })
-      });
-      const data = await response.json();
+      const data = await getVideoUrl(scanId, scan.value.objectKey);
       videoUrl.value = data.url;
     }
   } catch (error) {
-    // Handle error silently
+    console.error('Failed to load scan:', error);
   } finally {
     loading.value = false;
   }
