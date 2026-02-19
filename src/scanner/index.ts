@@ -192,6 +192,15 @@ export const handler = withDurableExecution(async (event: any, context) => {
             }));
             
             logger.info('Transcription job started successfully', { jobName });
+            
+            // Publish transcription started event for immediate UI feedback
+            await publishEvent({
+              type: 'TRANSCRIPTION_STARTED',
+              scanId,
+              userId,
+              timestamp: new Date().toISOString(),
+              data: { jobName },
+            });
           },
           { timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS }, retryStrategy: CALLBACK_RETRY_STRATEGY }
         );
@@ -270,6 +279,17 @@ export const handler = withDurableExecution(async (event: any, context) => {
                 },
                 JobTag: jobName
               }));
+              
+              logger.info('Rekognition text detection job started successfully', { jobName });
+              
+              // Publish rekognition started event for immediate UI feedback
+              await publishEvent({
+                type: 'REKOGNITION_STARTED',
+                scanId,
+                userId,
+                timestamp: new Date().toISOString(),
+                data: { jobName },
+              });
             },
             { timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS }, retryStrategy: CALLBACK_RETRY_STRATEGY }
           );
@@ -369,6 +389,18 @@ export const handler = withDurableExecution(async (event: any, context) => {
     // STEP 3: Build combined corpus
     // Merge audio transcript + video text with position index for source mapping
     // ==========================================================================
+    
+    // Publish corpus building event
+    await context.step('publish-corpus-building', async () => {
+      await publishEvent({
+        type: 'BUILDING_CORPUS',
+        scanId,
+        userId,
+        timestamp: new Date().toISOString(),
+        data: {},
+      });
+    });
+    
     const corpusData = await context.step('3-build-corpus', async () => {
       const positionIndex: any[] = [];
       let currentOffset = 0;
@@ -416,10 +448,33 @@ export const handler = withDurableExecution(async (event: any, context) => {
     // STEP 4: Parallel analysis - Toxicity + Sentiment + PII
     // Run all three Comprehend analyses concurrently on combined corpus
     // ==========================================================================
+    
+    // Publish analysis starting event
+    await context.step('publish-analysis-starting', async () => {
+      await publishEvent({
+        type: 'ANALYSIS_STARTING',
+        scanId,
+        userId,
+        timestamp: new Date().toISOString(),
+        data: {},
+      });
+    });
+    
     const analysisResults = await context.parallel([
       
       // Toxicity detection
-      async () => {
+      async (childContext) => {
+        // Publish toxicity started event
+        await childContext.step('publish-toxicity-started', async () => {
+          await publishEvent({
+            type: 'TOXICITY_STARTED',
+            scanId,
+            userId,
+            timestamp: new Date().toISOString(),
+            data: {},
+          });
+        });
+        
         const response = await comprehend.send(new DetectToxicContentCommand({
           TextSegments: [{ Text: corpusData.combinedText }],
           LanguageCode: 'en'
@@ -431,17 +486,39 @@ export const handler = withDurableExecution(async (event: any, context) => {
         }));
         const hasToxicContent = labels.some(l => l.Score > 0.5);
         
+        // Publish toxicity completed event
+        await childContext.step('publish-toxicity-completed', async () => {
+          await publishEvent({
+            type: 'TOXICITY_COMPLETED',
+            scanId,
+            userId,
+            timestamp: new Date().toISOString(),
+            data: { hasToxicContent, labelCount: labels.length },
+          });
+        });
+        
         return { hasToxicContent, labels };
       },
       
       // Sentiment analysis
-      async () => {
+      async (childContext) => {
+        // Publish sentiment started event
+        await childContext.step('publish-sentiment-started', async () => {
+          await publishEvent({
+            type: 'SENTIMENT_STARTED',
+            scanId,
+            userId,
+            timestamp: new Date().toISOString(),
+            data: {},
+          });
+        });
+        
         const response = await comprehend.send(new DetectSentimentCommand({
           Text: corpusData.combinedText.substring(0, 5000), // 5KB limit
           LanguageCode: 'en'
         }));
         
-        return {
+        const result = {
           sentiment: response.Sentiment!,
           sentimentScore: {
             Positive: response.SentimentScore?.Positive ?? 0,
@@ -450,10 +527,34 @@ export const handler = withDurableExecution(async (event: any, context) => {
             Mixed: response.SentimentScore?.Mixed ?? 0
           }
         };
+        
+        // Publish sentiment completed event
+        await childContext.step('publish-sentiment-completed', async () => {
+          await publishEvent({
+            type: 'SENTIMENT_COMPLETED',
+            scanId,
+            userId,
+            timestamp: new Date().toISOString(),
+            data: { sentiment: result.sentiment },
+          });
+        });
+        
+        return result;
       },
       
       // PII detection
-      async () => {
+      async (childContext) => {
+        // Publish PII started event
+        await childContext.step('publish-pii-started', async () => {
+          await publishEvent({
+            type: 'PII_STARTED',
+            scanId,
+            userId,
+            timestamp: new Date().toISOString(),
+            data: {},
+          });
+        });
+        
         const response = await comprehend.send(new DetectPiiEntitiesCommand({
           Text: corpusData.combinedText.substring(0, 100000), // 100KB limit
           LanguageCode: 'en'
@@ -471,12 +572,25 @@ export const handler = withDurableExecution(async (event: any, context) => {
           return acc;
         }, {} as Record<string, number>);
         
-        return {
+        const result = {
           hasPII: entities.length > 0,
           entityCount: entities.length,
           entityTypes,
           entities
         };
+        
+        // Publish PII completed event
+        await childContext.step('publish-pii-completed', async () => {
+          await publishEvent({
+            type: 'PII_COMPLETED',
+            scanId,
+            userId,
+            timestamp: new Date().toISOString(),
+            data: { hasPII: result.hasPII, entityCount: result.entityCount },
+          });
+        });
+        
+        return result;
       }
     ]);
 
@@ -542,6 +656,18 @@ export const handler = withDurableExecution(async (event: any, context) => {
     // STEP 6: Generate AI summary
     // Use Bedrock Nova Lite for executive summary
     // ==========================================================================
+    
+    // Publish AI summary generation starting event
+    await context.step('publish-generating-summary', async () => {
+      await publishEvent({
+        type: 'GENERATING_SUMMARY',
+        scanId,
+        userId,
+        timestamp: new Date().toISOString(),
+        data: {},
+      });
+    });
+    
     const aiSummary = await context.step('6-generate-summary', async () => {
       try {
         const prompt = `You are a content moderation assistant. Analyze the following content scan results and provide a concise summary.

@@ -90,24 +90,225 @@
                   <h3 class="font-semibold">{{ scan.objectKey.split('/').pop() }}</h3>
                   <p class="text-sm text-gray-600"><ClientOnly>{{ new Date(scan.uploadedAt).toLocaleString() }}</ClientOnly></p>
                   
-                  <!-- Status Progress Indicator -->
-                  <div class="flex items-center gap-2 mt-2">
-                    <!-- Completed steps as dots -->
-                    <div
-                      v-for="status in getCompletedStatuses(scan)"
-                      :key="status"
-                      :class="getStatusColor(status)"
-                      class="w-2 h-2 rounded-full"
-                      :title="formatStatus(status)"
-                    ></div>
-                    
-                    <!-- Current status as badge -->
-                    <span
-                      :class="getStatusBadgeClass(scan.approvalStatus)"
-                      class="px-2 py-1 rounded text-xs font-medium"
-                    >
-                      {{ formatStatus(scan.approvalStatus) }}
-                    </span>
+                  <!-- Status Progress Indicator with Parallel Flow -->
+                  <div class="mt-3">
+                    <div class="flex items-center gap-1">
+                      <!-- Sequential steps before parallel -->
+                      <div
+                        v-if="hasStatus(scan, 'SCAN_STARTED')"
+                        :class="getStatusColor('SCAN_STARTED')"
+                        class="w-3 h-3 rounded-full flex-shrink-0"
+                        :title="formatStatus('SCAN_STARTED')"
+                      ></div>
+                      <div v-if="hasStatus(scan, 'SCAN_STARTED')" class="w-3 h-px bg-gray-300"></div>
+                      
+                      <!-- Parallel branch indicator -->
+                      <div v-if="hasStatus(scan, 'TRANSCRIPTION_STARTED') || hasStatus(scan, 'REKOGNITION_STARTED')" class="flex items-center">
+                        <!-- Fork point -->
+                        <div class="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0"></div>
+                        
+                        <!-- Parallel branches container - always show both branches once parallel starts -->
+                        <div class="flex flex-col gap-0.5 ml-1">
+                          <!-- Top branch: Transcription -->
+                          <div class="flex items-center gap-1">
+                            <div class="w-2 h-px bg-gray-300 self-center"></div>
+                            <div
+                              :class="hasStatus(scan, 'TRANSCRIPTION_STARTED') ? getStatusColor('TRANSCRIPTION_STARTED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'TRANSCRIPTION_STARTED') ? 'Transcription Running' : 'Transcription Pending'"
+                            ></div>
+                            <div class="w-2 h-px self-center" :class="hasStatus(scan, 'TRANSCRIPTION_STARTED') ? 'bg-gray-300' : 'bg-gray-200'"></div>
+                            <div
+                              :class="hasStatus(scan, 'TRANSCRIPTION_COMPLETED') ? getStatusColor('TRANSCRIPTION_COMPLETED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'TRANSCRIPTION_COMPLETED') ? 'Transcription Done' : 'Waiting'"
+                            ></div>
+                          </div>
+                          
+                          <!-- Bottom branch: Rekognition -->
+                          <div class="flex items-center gap-1">
+                            <div class="w-2 h-px bg-gray-300 self-center"></div>
+                            <div
+                              :class="hasStatus(scan, 'REKOGNITION_STARTED') ? getStatusColor('REKOGNITION_STARTED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'REKOGNITION_STARTED') ? 'Rekognition Running' : 'Rekognition Pending'"
+                            ></div>
+                            <div class="w-2 h-px self-center" :class="hasStatus(scan, 'REKOGNITION_STARTED') ? 'bg-gray-300' : 'bg-gray-200'"></div>
+                            <div
+                              :class="hasStatus(scan, 'REKOGNITION_COMPLETED') ? getStatusColor('REKOGNITION_COMPLETED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'REKOGNITION_COMPLETED') ? 'Rekognition Done' : 'Waiting'"
+                            ></div>
+                          </div>
+                        </div>
+                        
+                        <!-- Merge point -->
+                        <div v-if="hasStatus(scan, 'BUILDING_CORPUS')" class="flex items-center ml-1">
+                          <div class="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0"></div>
+                          <div class="w-3 h-px bg-gray-300"></div>
+                        </div>
+                      </div>
+                      
+                      <!-- Sequential steps after parallel -->
+                      <div
+                        v-if="hasStatus(scan, 'BUILDING_CORPUS')"
+                        :class="getStatusColor('BUILDING_CORPUS')"
+                        class="w-3 h-3 rounded-full flex-shrink-0"
+                        :title="formatStatus('BUILDING_CORPUS')"
+                      ></div>
+                      <div v-if="hasStatus(scan, 'BUILDING_CORPUS')" class="w-3 h-px bg-gray-300"></div>
+                      
+                      <div
+                        v-if="hasStatus(scan, 'ANALYSIS_STARTING')"
+                        :class="getStatusColor('ANALYSIS_STARTING')"
+                        class="w-3 h-3 rounded-full flex-shrink-0"
+                        :title="formatStatus('ANALYSIS_STARTING')"
+                      ></div>
+                      <div v-if="hasStatus(scan, 'ANALYSIS_STARTING')" class="w-3 h-px bg-gray-300"></div>
+                      
+                      <!-- Analysis parallel branch indicator (3 branches) -->
+                      <div v-if="hasStatus(scan, 'TOXICITY_STARTED') || hasStatus(scan, 'SENTIMENT_STARTED') || hasStatus(scan, 'PII_STARTED')" class="flex items-center">
+                        <!-- Fork point -->
+                        <div class="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0"></div>
+                        
+                        <!-- Parallel branches container - 3 branches for analysis -->
+                        <div class="flex flex-col gap-0.5 ml-1">
+                          <!-- Top branch: Toxicity -->
+                          <div class="flex items-center gap-1">
+                            <div class="w-2 h-px bg-gray-300 self-center"></div>
+                            <div
+                              :class="hasStatus(scan, 'TOXICITY_STARTED') ? getStatusColor('TOXICITY_STARTED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'TOXICITY_STARTED') ? 'Toxicity Running' : 'Toxicity Pending'"
+                            ></div>
+                            <div class="w-2 h-px self-center" :class="hasStatus(scan, 'TOXICITY_STARTED') ? 'bg-gray-300' : 'bg-gray-200'"></div>
+                            <div
+                              :class="hasStatus(scan, 'TOXICITY_COMPLETED') ? getStatusColor('TOXICITY_COMPLETED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'TOXICITY_COMPLETED') ? 'Toxicity Done' : 'Waiting'"
+                            ></div>
+                          </div>
+                          
+                          <!-- Middle branch: Sentiment -->
+                          <div class="flex items-center gap-1">
+                            <div class="w-2 h-px bg-gray-300 self-center"></div>
+                            <div
+                              :class="hasStatus(scan, 'SENTIMENT_STARTED') ? getStatusColor('SENTIMENT_STARTED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'SENTIMENT_STARTED') ? 'Sentiment Running' : 'Sentiment Pending'"
+                            ></div>
+                            <div class="w-2 h-px self-center" :class="hasStatus(scan, 'SENTIMENT_STARTED') ? 'bg-gray-300' : 'bg-gray-200'"></div>
+                            <div
+                              :class="hasStatus(scan, 'SENTIMENT_COMPLETED') ? getStatusColor('SENTIMENT_COMPLETED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'SENTIMENT_COMPLETED') ? 'Sentiment Done' : 'Waiting'"
+                            ></div>
+                          </div>
+                          
+                          <!-- Bottom branch: PII -->
+                          <div class="flex items-center gap-1">
+                            <div class="w-2 h-px bg-gray-300 self-center"></div>
+                            <div
+                              :class="hasStatus(scan, 'PII_STARTED') ? getStatusColor('PII_STARTED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'PII_STARTED') ? 'PII Running' : 'PII Pending'"
+                            ></div>
+                            <div class="w-2 h-px self-center" :class="hasStatus(scan, 'PII_STARTED') ? 'bg-gray-300' : 'bg-gray-200'"></div>
+                            <div
+                              :class="hasStatus(scan, 'PII_COMPLETED') ? getStatusColor('PII_COMPLETED') : 'bg-gray-200'"
+                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              :title="hasStatus(scan, 'PII_COMPLETED') ? 'PII Done' : 'Waiting'"
+                            ></div>
+                          </div>
+                        </div>
+                        
+                        <!-- Merge point -->
+                        <div v-if="hasStatus(scan, 'ANALYSIS_COMPLETED')" class="flex items-center ml-1">
+                          <div class="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0"></div>
+                          <div class="w-3 h-px bg-gray-300"></div>
+                        </div>
+                      </div>
+                      
+                      <div
+                        v-if="hasStatus(scan, 'ANALYSIS_COMPLETED')"
+                        :class="getStatusColor('ANALYSIS_COMPLETED')"
+                        class="w-3 h-3 rounded-full flex-shrink-0"
+                        :title="formatStatus('ANALYSIS_COMPLETED')"
+                      ></div>
+                      <div v-if="hasStatus(scan, 'ANALYSIS_COMPLETED')" class="w-3 h-px bg-gray-300"></div>
+                      
+                      <div
+                        v-if="hasStatus(scan, 'GENERATING_SUMMARY')"
+                        :class="getStatusColor('GENERATING_SUMMARY')"
+                        class="w-3 h-3 rounded-full flex-shrink-0"
+                        :title="formatStatus('GENERATING_SUMMARY')"
+                      ></div>
+                      <div v-if="hasStatus(scan, 'GENERATING_SUMMARY')" class="w-3 h-px bg-gray-300"></div>
+                      
+                      <div
+                        v-if="hasStatus(scan, 'REPORT_GENERATED')"
+                        :class="getStatusColor('REPORT_GENERATED')"
+                        class="w-3 h-3 rounded-full flex-shrink-0"
+                        :title="formatStatus('REPORT_GENERATED')"
+                      ></div>
+                      
+                      <!-- Current status badge(s) move with progress -->
+                      <div class="ml-3">
+                        <!-- Show both parallel statuses when active during transcription/rekognition, stacked to match branches -->
+                        <template v-if="hasStatus(scan, 'TRANSCRIPTION_STARTED') && !hasStatus(scan, 'BUILDING_CORPUS')">
+                          <div class="flex flex-col gap-0.5">
+                            <span
+                              v-if="!hasStatus(scan, 'TRANSCRIPTION_COMPLETED')"
+                              :class="getStatusBadgeClass('TRANSCRIPTION_STARTED')"
+                              class="px-2 py-0.5 rounded text-xs font-medium inline-block"
+                            >
+                              {{ formatStatus('TRANSCRIPTION_STARTED') }}
+                            </span>
+                            <span
+                              v-if="hasStatus(scan, 'REKOGNITION_STARTED') && !hasStatus(scan, 'REKOGNITION_COMPLETED')"
+                              :class="getStatusBadgeClass('REKOGNITION_STARTED')"
+                              class="px-2 py-0.5 rounded text-xs font-medium inline-block"
+                            >
+                              {{ formatStatus('REKOGNITION_STARTED') }}
+                            </span>
+                          </div>
+                        </template>
+                        <!-- Show 3 parallel statuses when active during analysis, stacked to match branches -->
+                        <template v-else-if="hasStatus(scan, 'TOXICITY_STARTED') && !hasStatus(scan, 'ANALYSIS_COMPLETED')">
+                          <div class="flex flex-col gap-0.5">
+                            <span
+                              v-if="!hasStatus(scan, 'TOXICITY_COMPLETED')"
+                              :class="getStatusBadgeClass('TOXICITY_STARTED')"
+                              class="px-2 py-0.5 rounded text-xs font-medium inline-block"
+                            >
+                              {{ formatStatus('TOXICITY_STARTED') }}
+                            </span>
+                            <span
+                              v-if="hasStatus(scan, 'SENTIMENT_STARTED') && !hasStatus(scan, 'SENTIMENT_COMPLETED')"
+                              :class="getStatusBadgeClass('SENTIMENT_STARTED')"
+                              class="px-2 py-0.5 rounded text-xs font-medium inline-block"
+                            >
+                              {{ formatStatus('SENTIMENT_STARTED') }}
+                            </span>
+                            <span
+                              v-if="hasStatus(scan, 'PII_STARTED') && !hasStatus(scan, 'PII_COMPLETED')"
+                              :class="getStatusBadgeClass('PII_STARTED')"
+                              class="px-2 py-0.5 rounded text-xs font-medium inline-block"
+                            >
+                              {{ formatStatus('PII_STARTED') }}
+                            </span>
+                          </div>
+                        </template>
+                        <!-- Show single status for non-parallel steps -->
+                        <span
+                          v-else
+                          :class="getStatusBadgeClass(scan.approvalStatus)"
+                          class="px-2 py-1 rounded text-xs font-medium inline-block"
+                        >
+                          {{ formatStatus(scan.approvalStatus) }}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <span
@@ -158,9 +359,20 @@ onMounted(async () => {
 const statusOrder = [
   'PROCESSING',
   'SCAN_STARTED',
+  'TRANSCRIPTION_STARTED',
   'TRANSCRIPTION_COMPLETED',
+  'REKOGNITION_STARTED',
   'REKOGNITION_COMPLETED',
+  'BUILDING_CORPUS',
+  'ANALYSIS_STARTING',
+  'TOXICITY_STARTED',
+  'TOXICITY_COMPLETED',
+  'SENTIMENT_STARTED',
+  'SENTIMENT_COMPLETED',
+  'PII_STARTED',
+  'PII_COMPLETED',
   'ANALYSIS_COMPLETED',
+  'GENERATING_SUMMARY',
   'REPORT_GENERATED',
   'PENDING_REVIEW',
   'APPROVED',
@@ -187,9 +399,20 @@ const getCompletedStatuses = (scan: any) => {
 const getStatusColor = (status: string) => {
   const colors: Record<string, string> = {
     'SCAN_STARTED': 'bg-blue-500',
-    'TRANSCRIPTION_COMPLETED': 'bg-purple-500',
-    'REKOGNITION_COMPLETED': 'bg-indigo-500',
-    'ANALYSIS_COMPLETED': 'bg-cyan-500',
+    'TRANSCRIPTION_STARTED': 'bg-purple-400',
+    'TRANSCRIPTION_COMPLETED': 'bg-purple-600',
+    'REKOGNITION_STARTED': 'bg-indigo-400',
+    'REKOGNITION_COMPLETED': 'bg-indigo-600',
+    'BUILDING_CORPUS': 'bg-violet-500',
+    'ANALYSIS_STARTING': 'bg-cyan-500',
+    'TOXICITY_STARTED': 'bg-orange-400',
+    'TOXICITY_COMPLETED': 'bg-orange-600',
+    'SENTIMENT_STARTED': 'bg-emerald-400',
+    'SENTIMENT_COMPLETED': 'bg-emerald-600',
+    'PII_STARTED': 'bg-rose-400',
+    'PII_COMPLETED': 'bg-rose-600',
+    'ANALYSIS_COMPLETED': 'bg-cyan-600',
+    'GENERATING_SUMMARY': 'bg-teal-400',
     'REPORT_GENERATED': 'bg-teal-500',
     'PENDING_REVIEW': 'bg-yellow-500',
     'APPROVED': 'bg-green-500',
@@ -203,9 +426,20 @@ const getStatusBadgeClass = (status: string) => {
   const classes: Record<string, string> = {
     'PROCESSING': 'bg-gray-100 text-gray-600 animate-pulse',
     'SCAN_STARTED': 'bg-blue-100 text-blue-800',
+    'TRANSCRIPTION_STARTED': 'bg-purple-100 text-purple-700 animate-pulse',
     'TRANSCRIPTION_COMPLETED': 'bg-purple-100 text-purple-800',
+    'REKOGNITION_STARTED': 'bg-indigo-100 text-indigo-700 animate-pulse',
     'REKOGNITION_COMPLETED': 'bg-indigo-100 text-indigo-800',
+    'BUILDING_CORPUS': 'bg-violet-100 text-violet-800 animate-pulse',
+    'ANALYSIS_STARTING': 'bg-cyan-100 text-cyan-800',
+    'TOXICITY_STARTED': 'bg-orange-100 text-orange-700 animate-pulse',
+    'TOXICITY_COMPLETED': 'bg-orange-100 text-orange-800',
+    'SENTIMENT_STARTED': 'bg-emerald-100 text-emerald-700 animate-pulse',
+    'SENTIMENT_COMPLETED': 'bg-emerald-100 text-emerald-800',
+    'PII_STARTED': 'bg-rose-100 text-rose-700 animate-pulse',
+    'PII_COMPLETED': 'bg-rose-100 text-rose-800',
     'ANALYSIS_COMPLETED': 'bg-cyan-100 text-cyan-800',
+    'GENERATING_SUMMARY': 'bg-teal-100 text-teal-700 animate-pulse',
     'REPORT_GENERATED': 'bg-teal-100 text-teal-800',
     'PENDING_REVIEW': 'bg-yellow-100 text-yellow-800',
     'APPROVED': 'bg-green-100 text-green-800',
@@ -214,11 +448,31 @@ const getStatusBadgeClass = (status: string) => {
   return classes[status] || 'bg-gray-100 text-gray-600';
 };
 
+const hasStatus = (scan: any, status: string) => {
+  // Check if this specific status has been reached
+  if (!scan.statusHistory) {
+    scan.statusHistory = [];
+  }
+  const result = scan.statusHistory.includes(status);
+  if (status === 'TRANSCRIPTION_STARTED' || status === 'REKOGNITION_STARTED') {
+    console.log(`[hasStatus] Checking ${status} for scan ${scan.scanId?.substring(0, 8)}:`, result, 'History:', scan.statusHistory);
+  }
+  return result;
+};
+
 const loadScans = async () => {
   loading.value = true;
   try {
     const result = await listScans();
-    scans.value = result.scans;
+    // Populate statusHistory for each scan based on their current status
+    scans.value = result.scans.map((scan: any) => {
+      if (!scan.statusHistory) {
+        // Build history from current status - assume all previous statuses were reached
+        const currentIndex = statusOrder.indexOf(scan.approvalStatus);
+        scan.statusHistory = currentIndex >= 0 ? statusOrder.slice(1, currentIndex + 1) : [];
+      }
+      return scan;
+    });
   } catch (error) {
     // Handle error silently
   } finally {
@@ -291,6 +545,7 @@ const viewScan = (scanId: string) => {
 // Listen for realtime scan updates
 const handleScanUpdate = (event: CustomEvent) => {
   const update = event.detail;
+  console.log('[Dashboard] Received scan update:', update.type, 'for scan:', update.scanId);
   
   // Find existing scan by scanId
   const existingIndex = scans.value.findIndex(s => s.scanId === update.scanId);
@@ -298,9 +553,24 @@ const handleScanUpdate = (event: CustomEvent) => {
   if (existingIndex >= 0) {
     // Update existing scan with new status - create new array for reactivity
     const updatedScans = [...scans.value];
+    const currentScan = updatedScans[existingIndex];
+    
+    // Initialize statusHistory if it doesn't exist
+    if (!currentScan.statusHistory) {
+      currentScan.statusHistory = [];
+    }
+    
+    // Add this status to history if not already present
+    if (!currentScan.statusHistory.includes(update.type)) {
+      currentScan.statusHistory = [
+        ...currentScan.statusHistory,
+        update.type
+      ];
+      console.log('[Dashboard] Updated statusHistory:', currentScan.statusHistory);
+    }
     
     // Map event type to approval status
-    let approvalStatus = updatedScans[existingIndex].approvalStatus;
+    let approvalStatus = currentScan.approvalStatus;
     if (update.type === 'PENDING_REVIEW') {
       approvalStatus = 'PENDING_REVIEW';
     } else if (update.type === 'APPROVED') {
@@ -312,10 +582,12 @@ const handleScanUpdate = (event: CustomEvent) => {
       approvalStatus = update.type;
     }
     
+    // Create completely new object for reactivity
     updatedScans[existingIndex] = {
-      ...updatedScans[existingIndex],
+      ...currentScan,
+      statusHistory: [...currentScan.statusHistory], // Force new array reference
       approvalStatus,
-      overallAssessment: update.data?.overallAssessment || updatedScans[existingIndex].overallAssessment,
+      overallAssessment: update.data?.overallAssessment || currentScan.overallAssessment,
       isOptimistic: false,
     };
     scans.value = updatedScans;
@@ -328,6 +600,7 @@ const handleScanUpdate = (event: CustomEvent) => {
       uploadedAt: update.timestamp,
       approvalStatus: 'PROCESSING',
       overallAssessment: 'PROCESSING',
+      statusHistory: ['SCAN_STARTED'],
     }, ...scans.value];
   }
 };
