@@ -6,12 +6,14 @@ import { ComprehendClient, DetectToxicContentCommand, DetectSentimentCommand, De
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import { marshall } from '@aws-sdk/util-dynamodb';
 import { Logger } from '@aws-lambda-powertools/logger';
 import { SignatureV4 } from '@smithy/signature-v4';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { HttpRequest } from '@smithy/protocol-http';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
+
+// @ts-ignore - module resolution issue with util-dynamodb
+const { marshall } = require('@aws-sdk/util-dynamodb');
 
 // ============================================================================
 // CONFIGURATION
@@ -204,6 +206,9 @@ export const handler = withDurableExecution(async (event: any, context) => {
           },
           { timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS }, retryStrategy: CALLBACK_RETRY_STRATEGY }
         );
+        // ============================================================
+        // ⏸️  EXECUTION PAUSED ABOVE - Resumed after callback received
+        // ============================================================
 
         // Fetch transcript from S3
         const transcriptData = await childContext.step('2a-fetch-transcript', async () => {
@@ -293,6 +298,9 @@ export const handler = withDurableExecution(async (event: any, context) => {
             },
             { timeout: { seconds: TIMEOUTS.CALLBACK_SECONDS }, retryStrategy: CALLBACK_RETRY_STRATEGY }
           );
+          // ============================================================
+          // ⏸️  EXECUTION PAUSED ABOVE - Resumed after callback received
+          // ============================================================
 
           // Fetch video text results
           const videoTextData = await childContext.step('2b-fetch-video-text', async () => {
@@ -462,7 +470,7 @@ export const handler = withDurableExecution(async (event: any, context) => {
     
     const analysisResults = await context.parallel([
       
-      // Toxicity detection
+      // Branch 1: Toxicity detection
       async (childContext) => {
         // Publish toxicity started event
         await childContext.step('publish-toxicity-started', async () => {
@@ -475,16 +483,20 @@ export const handler = withDurableExecution(async (event: any, context) => {
           });
         });
         
-        const response = await comprehend.send(new DetectToxicContentCommand({
-          TextSegments: [{ Text: corpusData.combinedText }],
-          LanguageCode: 'en'
-        }));
-        
-        const labels = (response.ResultList?.[0]?.Labels || []).map(l => ({
-          Name: l.Name!,
-          Score: l.Score!
-        }));
-        const hasToxicContent = labels.some(l => l.Score > 0.5);
+        const toxicityData = await childContext.step('detect-toxicity', async () => {
+          const response = await comprehend.send(new DetectToxicContentCommand({
+            TextSegments: [{ Text: corpusData.combinedText }],
+            LanguageCode: 'en'
+          }));
+          
+          const labels = (response.ResultList?.[0]?.Labels || []).map(l => ({
+            Name: l.Name!,
+            Score: l.Score!
+          }));
+          const hasToxicContent = labels.some(l => l.Score > 0.5);
+          
+          return { hasToxicContent, labels };
+        });
         
         // Publish toxicity completed event
         await childContext.step('publish-toxicity-completed', async () => {
@@ -493,14 +505,14 @@ export const handler = withDurableExecution(async (event: any, context) => {
             scanId,
             userId,
             timestamp: new Date().toISOString(),
-            data: { hasToxicContent, labelCount: labels.length },
+            data: { hasToxicContent: toxicityData.hasToxicContent, labelCount: toxicityData.labels.length },
           });
         });
         
-        return { hasToxicContent, labels };
+        return toxicityData;
       },
       
-      // Sentiment analysis
+      // Branch 2: Sentiment analysis
       async (childContext) => {
         // Publish sentiment started event
         await childContext.step('publish-sentiment-started', async () => {
@@ -513,20 +525,22 @@ export const handler = withDurableExecution(async (event: any, context) => {
           });
         });
         
-        const response = await comprehend.send(new DetectSentimentCommand({
-          Text: corpusData.combinedText.substring(0, 5000), // 5KB limit
-          LanguageCode: 'en'
-        }));
-        
-        const result = {
-          sentiment: response.Sentiment!,
-          sentimentScore: {
-            Positive: response.SentimentScore?.Positive ?? 0,
-            Negative: response.SentimentScore?.Negative ?? 0,
-            Neutral: response.SentimentScore?.Neutral ?? 0,
-            Mixed: response.SentimentScore?.Mixed ?? 0
-          }
-        };
+        const sentimentData = await childContext.step('detect-sentiment', async () => {
+          const response = await comprehend.send(new DetectSentimentCommand({
+            Text: corpusData.combinedText.substring(0, 5000), // 5KB limit
+            LanguageCode: 'en'
+          }));
+          
+          return {
+            sentiment: response.Sentiment!,
+            sentimentScore: {
+              Positive: response.SentimentScore?.Positive ?? 0,
+              Negative: response.SentimentScore?.Negative ?? 0,
+              Neutral: response.SentimentScore?.Neutral ?? 0,
+              Mixed: response.SentimentScore?.Mixed ?? 0
+            }
+          };
+        });
         
         // Publish sentiment completed event
         await childContext.step('publish-sentiment-completed', async () => {
@@ -535,14 +549,14 @@ export const handler = withDurableExecution(async (event: any, context) => {
             scanId,
             userId,
             timestamp: new Date().toISOString(),
-            data: { sentiment: result.sentiment },
+            data: { sentiment: sentimentData.sentiment },
           });
         });
         
-        return result;
+        return sentimentData;
       },
       
-      // PII detection
+      // Branch 3: PII detection
       async (childContext) => {
         // Publish PII started event
         await childContext.step('publish-pii-started', async () => {
@@ -555,29 +569,31 @@ export const handler = withDurableExecution(async (event: any, context) => {
           });
         });
         
-        const response = await comprehend.send(new DetectPiiEntitiesCommand({
-          Text: corpusData.combinedText.substring(0, 100000), // 100KB limit
-          LanguageCode: 'en'
-        }));
-        
-        const entities = (response.Entities || []).map(e => ({
-          type: e.Type!,
-          score: e.Score!,
-          beginOffset: e.BeginOffset!,
-          endOffset: e.EndOffset!
-        }));
-        
-        const entityTypes = entities.reduce((acc, e) => {
-          acc[e.type] = (acc[e.type] || 0) + 1;
-          return acc;
-        }, {} as Record<string, number>);
-        
-        const result = {
-          hasPII: entities.length > 0,
-          entityCount: entities.length,
-          entityTypes,
-          entities
-        };
+        const piiData = await childContext.step('detect-pii', async () => {
+          const response = await comprehend.send(new DetectPiiEntitiesCommand({
+            Text: corpusData.combinedText.substring(0, 100000), // 100KB limit
+            LanguageCode: 'en'
+          }));
+          
+          const entities = (response.Entities || []).map(e => ({
+            type: e.Type!,
+            score: e.Score!,
+            beginOffset: e.BeginOffset!,
+            endOffset: e.EndOffset!
+          }));
+          
+          const entityTypes = entities.reduce((acc, e) => {
+            acc[e.type] = (acc[e.type] || 0) + 1;
+            return acc;
+          }, {} as Record<string, number>);
+          
+          return {
+            hasPII: entities.length > 0,
+            entityCount: entities.length,
+            entityTypes,
+            entities
+          };
+        });
         
         // Publish PII completed event
         await childContext.step('publish-pii-completed', async () => {
@@ -586,11 +602,11 @@ export const handler = withDurableExecution(async (event: any, context) => {
             scanId,
             userId,
             timestamp: new Date().toISOString(),
-            data: { hasPII: result.hasPII, entityCount: result.entityCount },
+            data: { hasPII: piiData.hasPII, entityCount: piiData.entityCount },
           });
         });
         
-        return result;
+        return piiData;
       }
     ]);
 
@@ -889,18 +905,12 @@ Keep it concise and actionable.`;
       },
       {
         timeout: { seconds: TIMEOUTS.APPROVAL_SECONDS },
-        retryStrategy: CALLBACK_RETRY_STRATEGY,
-        onTimeout: async () => {
-          logger.warn('Approval timeout - auto-rejecting', { scanId });
-          return {
-            approved: false,
-            reviewedBy: 'system',
-            reviewedAt: new Date().toISOString(),
-            comments: 'Auto-rejected due to 3-day approval timeout'
-          };
-        }
+        retryStrategy: CALLBACK_RETRY_STRATEGY
       }
     );
+    // ============================================================
+    // ⏸️  EXECUTION PAUSED ABOVE - Resumed after approval/rejection
+    // ============================================================
     
     const parsedApproval = typeof approvalResult === 'string' ? JSON.parse(approvalResult) : approvalResult;
 
