@@ -1,0 +1,11 @@
+{
+  "detail": {
+    "bucket": {
+      "name": "YOUR-BUCKET-NAME"
+    },
+    "object": {
+      "key": "raw/USER_ID/video.mp4",
+      "size": 5711719
+    }
+  }
+}

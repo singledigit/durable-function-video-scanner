@@ -473,6 +473,9 @@ All functions have X-Ray tracing enabled for distributed tracing and performance
 ```
 
 ### Local Testing
+
+Before testing locally, update `events/s3-event.json` with your bucket name and user ID from the SAM deployment outputs.
+
 ```bash
 # Invoke scanner locally
 sam local invoke ScannerFunction -e events/s3-event.json
