@@ -31,3 +31,6 @@ coverage/
 # Ignore documentation
 README.md
 *.md
+
+# Ignore demo files
+index_*.md

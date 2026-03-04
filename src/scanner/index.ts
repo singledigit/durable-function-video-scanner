@@ -11,9 +11,7 @@ import { SignatureV4 } from '@smithy/signature-v4';
 import { Sha256 } from '@aws-crypto/sha256-js';
 import { HttpRequest } from '@smithy/protocol-http';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
-
-// @ts-ignore - module resolution issue with util-dynamodb
-const { marshall } = require('@aws-sdk/util-dynamodb');
+import { marshall } from '@aws-sdk/util-dynamodb';
 
 // ============================================================================
 // CONFIGURATION

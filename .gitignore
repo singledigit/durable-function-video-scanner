@@ -35,3 +35,7 @@ samconfig.toml
 
 # Demo files
 demo/
+src/scanner/index_*.ts
+
+# env file
+locals.json

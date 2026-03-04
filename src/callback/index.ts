@@ -38,7 +38,6 @@ interface DirectInvokeEvent {
 }
 
 export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEvent | DirectInvokeEvent) => {
-  logger.info('Callback handler invoked', { event });
 
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -87,10 +86,7 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
           comments: body.comments || ''
         };
         
-        logger.info('API Gateway approval event detected', { 
-          scanId, 
-          approved: body.approved 
-        });
+
       } catch (parseError) {
         logger.error('Failed to parse API Gateway request body', { 
           error: parseError instanceof Error ? parseError.message : String(parseError) 
@@ -127,7 +123,6 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
           };
         }
         
-        logger.info('Transcribe event detected', { jobName, status });
       } else {
         throw new Error('Unknown EventBridge event type');
       }
@@ -160,7 +155,6 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
         };
       }
       
-      logger.info('Rekognition event detected', { jobName, jobId, status, scanId });
     }
     // Direct invoke (Approval)
     else if ('scanId' in event) {
@@ -174,7 +168,6 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
         comments: event.comments || ''
       };
       
-      logger.info('Approval event detected', { scanId: event.scanId, approved: event.approved });
     }
     else {
       throw new Error('Unknown event type');
@@ -234,7 +227,6 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
       throw new Error(`Callback token not found for job: ${jobName}`);
     }
 
-    logger.info('Found callback token', { jobName });
 
     // Send callback to durable execution
     if (isFailure) {
@@ -246,7 +238,6 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
       });
       
       await lambda.send(command);
-      logger.info('Failure callback sent', { jobName });
     } else {
       const command = new SendDurableExecutionCallbackSuccessCommand({
         CallbackId: callbackToken,
@@ -254,7 +245,6 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
       });
       
       await lambda.send(command);
-      logger.info('Success callback sent', { jobName });
     }
 
     // Clean up the token from DynamoDB
@@ -290,8 +280,6 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
         }));
       }
     }
-    
-    logger.info('Callback token cleaned up from DynamoDB', { jobName });
 
     // Return appropriate response based on event source
     if ('httpMethod' in event) {
