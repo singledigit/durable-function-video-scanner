@@ -54,76 +54,60 @@ The workflow orchestrates multiple AI services using Lambda Durable Functions, w
 ### Durable Function Orchestration Flow
 
 ```mermaid
-graph TB
+graph TD
     Start([S3 Upload Event]) --> Step0[Step 0: Generate Scan ID]
+    Step0 --> Step1[Step 1: Parallel Execution]
     
-    Step0 --> Event1[Publish: SCAN_STARTED]
-    Event1 --> Step1[Step 1: Parallel Execution]
+    Step1 --> T1
+    Step1 --> R1
     
-    subgraph "Parallel Branch 1: Transcription"
-        Step1 --> T1[Start Transcribe Job]
-        T1 --> T2[Publish: TRANSCRIPTION_STARTED]
-        T2 --> T3[⏸️ Wait for Callback<br/>30 min timeout]
+    subgraph "Branch 1: Transcription"
+        T1[Start Transcribe Job]
+        T1 --> T3[⏸️ Wait for Callback<br/>30 min timeout]
         T3 --> T4[Fetch Transcript from S3]
-        T4 --> T5[Publish: TRANSCRIPTION_COMPLETED]
     end
     
-    subgraph "Parallel Branch 2: Rekognition"
-        Step1 --> R1[Start Rekognition Job]
-        R1 --> R2[Publish: REKOGNITION_STARTED]
-        R2 --> R3[⏸️ Wait for Callback<br/>30 min timeout]
+    subgraph "Branch 2: Rekognition"
+        R1[Start Rekognition Job]
+        R1 --> R3[⏸️ Wait for Callback<br/>30 min timeout]
         R3 --> R4[Extract Video Text]
-        R4 --> R5[Publish: REKOGNITION_COMPLETED]
     end
     
-    T5 --> Step2[Step 2: Build Corpus]
-    R5 --> Step2
+    T4 --> Step2[Step 2: Build Corpus]
+    R4 --> Step2
+    Step2 --> Step3[Step 3: Parallel Analysis]
     
-    Step2 --> Event2[Publish: BUILDING_CORPUS]
-    Event2 --> Step3[Step 3: Parallel Analysis]
+    Step3 --> A3
+    Step3 --> S3
+    Step3 --> P3
     
-    subgraph "Parallel Branch 3: Toxicity"
-        Step3 --> A1[Comprehend Toxicity]
-        A1 --> A2[Publish: TOXICITY_STARTED]
-        A2 --> A3[Detect Toxic Content]
-        A3 --> A4[Publish: TOXICITY_COMPLETED]
+    subgraph "Branch 1: Toxicity"
+        A3[Detect Toxic Content]
     end
     
-    subgraph "Parallel Branch 4: Sentiment"
-        Step3 --> S1[Comprehend Sentiment]
-        S1 --> S2[Publish: SENTIMENT_STARTED]
-        S2 --> S3[Analyze Sentiment]
-        S3 --> S4[Publish: SENTIMENT_COMPLETED]
+    subgraph "Branch 2: Sentiment"
+        S3[Analyze Sentiment]
     end
     
-    subgraph "Parallel Branch 5: PII"
-        Step3 --> P1[Comprehend PII]
-        P1 --> P2[Publish: PII_STARTED]
-        P2 --> P3[Detect PII Entities]
-        P3 --> P4[Publish: PII_COMPLETED]
+    subgraph "Branch 3: PII"
+        P3[Detect PII Entities]
     end
     
-    A4 --> Step4[Step 4: Map to Sources]
-    S4 --> Step4
-    P4 --> Step4
+    A3 --> Step4[Step 4: Map to Sources]
+    S3 --> Step4
+    P3 --> Step4
+    Step4 --> Step5[Step 5: Generate AI Summary]
     
-    Step4 --> Event3[Publish: ANALYSIS_COMPLETED]
-    Event3 --> Step5[Step 5: Generate AI Summary]
-    
-    Step5 --> Event4[Publish: GENERATING_SUMMARY]
-    Event4 --> Bedrock[Bedrock Nova Lite]
+    Step5 --> Bedrock[Bedrock Nova Lite]
     Bedrock --> Step6[Step 6: Save Results]
     
     Step6 --> SaveS3[Save JSON/HTML to S3]
     SaveS3 --> SaveDDB[Save Metadata to DynamoDB]
-    SaveDDB --> Event5[Publish: REPORT_GENERATED]
-    
-    Event5 --> Event6[Publish: PENDING_REVIEW]
-    Event6 --> Step7[Step 7: Human Approval]
+    SaveDDB --> Step7[Step 7: Human Approval]
     
     Step7 --> Wait[⏸️ Wait for Callback<br/>3 day timeout]
-    Wait -->|Approved| Approve[Publish: APPROVED]
-    Wait -->|Rejected| Reject[Publish: REJECTED]
+    Wait -->|Approved| Approve[Approved]
+    Wait -->|Rejected| Reject[Rejected]
     Wait -->|Timeout| Timeout[Auto-Reject]
     
     Approve --> End([Workflow Complete])
@@ -132,9 +116,9 @@ graph TB
     
     style Step1 fill:#9c27b0
     style Step3 fill:#9c27b0
-    style T3 fill:#ffc107
-    style R3 fill:#ffc107
-    style Wait fill:#ffc107
+    style T3 fill:#f57c00
+    style R3 fill:#f57c00
+    style Wait fill:#f57c00
     style Bedrock fill:#e91e63
     style End fill:#4caf50
 ```
