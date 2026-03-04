@@ -2,6 +2,10 @@
 
 A serverless video content analysis pipeline built with AWS Lambda Durable Functions, demonstrating advanced orchestration patterns for long-running workflows with human-in-the-loop approval and real-time UI updates.
 
+## Why This Matters
+
+Unlike agentic frameworks or self-hosted orchestration solutions, Lambda durable functions provide native serverless orchestration that scales automatically without managing infrastructure. You get the reliability and scalability of AWS Lambda with built-in state management, automatic retries, and checkpoint recovery.
+
 ## Overview
 
 This application automatically processes video files uploaded to S3, performing comprehensive content analysis through a multi-step durable workflow that can run for days while maintaining state. It demonstrates key durable function patterns including parallel execution, async callbacks, human approval workflows, and real-time progress visualization.
