@@ -8,64 +8,44 @@ This application automatically processes video files uploaded to S3, performing 
 
 ## Architecture
 
-### System Architecture
-
 ```mermaid
 graph TB
-    UI[Nuxt.js Dashboard]
-    AppSync[AppSync Events API]
-    APIGW[API Gateway]
-    APIScans[api-scans Lambda]
-    APIUsers[api-users Lambda]
-    Cognito[Cognito User Pool]
-    S3[S3 Bucket<br/>Videos & Reports]
-    DDB[(DynamoDB<br/>Scans & Tokens)]
+    S3[S3 Bucket]
+    EventBridge[EventBridge]
     Scanner[Scanner Function<br/>Durable Orchestrator]
-    Callback[Callback Function<br/>Unified Handler]
+    Callback[Callback Function]
+    DDB[(DynamoDB)]
+    
     Transcribe[Amazon Transcribe]
     Rekognition[Amazon Rekognition]
     Comprehend[Amazon Comprehend]
-    Bedrock[Amazon Bedrock<br/>Nova Lite]
-    EventBridge[EventBridge]
+    Bedrock[Amazon Bedrock]
     SNS[SNS Topic]
     
-    UI -->|Auth| Cognito
-    UI -->|API Calls| APIGW
-    UI <-->|Real-time Events| AppSync
-    
-    APIGW --> APIScans
-    APIGW --> APIUsers
-    APIScans --> DDB
-    APIUsers --> DDB
-    APIScans --> S3
-    
-    S3 -->|Object Created| EventBridge
+    S3 -->|Video Upload| EventBridge
     EventBridge -->|Trigger| Scanner
     
-    Scanner -->|Start Jobs| Transcribe
-    Scanner -->|Start Jobs| Rekognition
-    Scanner -->|Analyze| Comprehend
+    Scanner -->|Transcribe Audio| Transcribe
+    Scanner -->|Moderate Content| Rekognition
+    Scanner -->|Analyze Sentiment| Comprehend
     Scanner -->|Generate Summary| Bedrock
-    Scanner -->|Save Results| S3
-    Scanner -->|Save Metadata| DDB
-    Scanner -->|Publish Events| AppSync
-    Scanner <-->|Wait for Callback| Callback
+    Scanner -->|Store Results| S3
+    Scanner -->|Store Metadata| DDB
+    Scanner <-->|Wait/Resume| Callback
     
-    Transcribe -->|Job Complete| EventBridge
+    Transcribe -->|Complete| EventBridge
     EventBridge -->|Notify| Callback
     
-    Rekognition -->|Job Complete| SNS
+    Rekognition -->|Complete| SNS
     SNS -->|Notify| Callback
     
-    APIGW -->|Approval/Reject| Callback
-    
-    Callback -->|Resume| Scanner
+    Callback -->|Resume Execution| Scanner
     
     style Scanner fill:#ff9800
     style Callback fill:#4caf50
-    style AppSync fill:#2196f3
-    style UI fill:#9c27b0
 ```
+
+The workflow orchestrates multiple AI services using Lambda Durable Functions, with EventBridge and SNS handling async job completions.
 
 ### Durable Function Orchestration Flow
 
@@ -354,58 +334,90 @@ sam build
 sam deploy --guided
 ```
 
+During deployment, you'll be prompted for an admin email address. After deployment completes:
+1. SAM will output all configuration values needed for the frontend `.env` file
+2. Check your email for temporary credentials from Cognito
+3. Use these credentials to log into the application
+4. As an admin user, you can invite regular users through the admin interface
+
 ### Deploy Frontend
 ```bash
 cd frontend
 npm install
+
+# Copy the configuration values from SAM deployment output to .env
+# The output includes a ready-to-use FrontendEnvFile with all values
+
 npm run dev  # Local development
 npm run build  # Production build
 ```
 
 ### Configuration
-Update `frontend/.env`:
+After SAM deployment, copy the `FrontendEnvFile` output to `frontend/.env`:
 ```
-NUXT_PUBLIC_API_ENDPOINT=https://your-api-gateway-url
-NUXT_PUBLIC_COGNITO_USER_POOL_ID=your-pool-id
-NUXT_PUBLIC_COGNITO_CLIENT_ID=your-client-id
-NUXT_PUBLIC_APPSYNC_HTTP_ENDPOINT=your-appsync-http-url
-NUXT_PUBLIC_APPSYNC_REALTIME_ENDPOINT=your-appsync-realtime-url
+NUXT_PUBLIC_API_ENDPOINT=https://your-api-id.execute-api.us-west-2.amazonaws.com/prod
+NUXT_PUBLIC_USER_POOL_ID=us-west-2_xxxxxxxxx
+NUXT_PUBLIC_USER_POOL_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
+NUXT_PUBLIC_APPSYNC_HTTP_ENDPOINT=https://xxx.appsync-api.us-west-2.amazonaws.com/event
+NUXT_PUBLIC_APPSYNC_REALTIME_ENDPOINT=wss://xxx.appsync-realtime-api.us-west-2.amazonaws.com/event/realtime
+NUXT_PUBLIC_REGION=us-west-2
 ```
 
 ## Usage
 
-### Upload a Video
-```bash
-# Via CLI
-aws s3 cp video.mp4 s3://YOUR-BUCKET/raw/USER_ID/video.mp4
+You can interact with the application through the web frontend or using AWS CLI commands.
 
-# Via UI
-# Use the dashboard upload interface
+### Upload a Video
+
+**Via Frontend:**
+- Log into the dashboard and use the upload interface
+
+**Via CLI:**
+```bash
+aws s3 cp video.mp4 s3://YOUR-BUCKET/raw/USER_ID/video.mp4 --profile demo
 ```
 
 ### Monitor Progress
+
+**Via Frontend:**
 - Watch real-time updates in the dashboard
 - See parallel branches execute simultaneously
-- Track status through fork/merge visualization
+- Track status through the scan details page
 
-### Approve or Reject
+**Via CLI:**
+```bash
+# Get scan details
+aws dynamodb get-item \
+  --table-name scanner-table \
+  --key '{"PK":{"S":"SCAN#SCAN_ID"},"SK":{"S":"METADATA"}}' \
+  --profile demo | jq
+```
+
+### Approve or Reject Content
+
+**Via Frontend:**
+- Admin users can review pending scans in the admin dashboard
+- Click approve or reject with optional comments
+
+**Via CLI:**
 ```bash
 # Get pending reviews
 aws dynamodb query \
   --table-name scanner-table \
   --index-name GSI2 \
   --key-condition-expression "GSI2PK = :pk" \
-  --expression-attribute-values '{":pk":{"S":"APPROVAL#PENDING"}}'
+  --expression-attribute-values '{":pk":{"S":"APPROVAL#PENDING"}}' \
+  --profile demo | jq
 
-# Approve via SAM CLI
+# Approve
 sam remote callback succeed TOKEN \
-  --result '{"approved":true,"reviewedBy":"admin@example.com","comments":"Looks good"}'
+  --result '{"approved":true,"reviewedBy":"admin@example.com","comments":"Looks good"}' \
+  --profile demo
 
-# Reject via SAM CLI
+# Reject
 sam remote callback succeed TOKEN \
-  --result '{"approved":false,"reviewedBy":"admin@example.com","comments":"Issues found"}'
-
-# Or use the admin dashboard UI
+  --result '{"approved":false,"reviewedBy":"admin@example.com","comments":"Issues found"}' \
+  --profile demo
 ```
 
 ## Monitoring
