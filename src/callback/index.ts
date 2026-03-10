@@ -136,9 +136,9 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
       const status = message.Status;
       const jobId = message.JobId;
       
-      // Extract scanId from jobName (format: rekognition-timestamp-scanId_...)
-      const scanIdMatch = jobName.match(/rekognition-\d+-(.+)/);
-      const scanId = scanIdMatch ? scanIdMatch[1].split('_')[0] : null;
+      // Extract scanId from jobName (format: rekognition-{scanId})
+      const scanIdMatch = jobName.match(/rekognition-(.+)/);
+      const scanId = scanIdMatch ? scanIdMatch[1] : null;
       
       result = {
         jobName,
@@ -195,13 +195,13 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
       let scanId: string | null = null;
       
       if (jobName.startsWith('transcribe-')) {
-        // Format: transcribe-timestamp-scanId_...
-        const match = jobName.match(/transcribe-\d+-(.+)/);
-        scanId = match ? match[1].split('_')[0] : null;
+        // Format: transcribe-{scanId}
+        const match = jobName.match(/transcribe-(.+)/);
+        scanId = match ? match[1] : null;
       } else if (jobName.startsWith('rekognition-')) {
-        // Format: rekognition-timestamp-scanId_...
-        const match = jobName.match(/rekognition-\d+-(.+)/);
-        scanId = match ? match[1].split('_')[0] : null;
+        // Format: rekognition-{scanId}
+        const match = jobName.match(/rekognition-(.+)/);
+        scanId = match ? match[1] : null;
       }
       
       if (!scanId) {
@@ -262,11 +262,11 @@ export const handler = async (event: EventBridgeEvent | SNSEvent | ApiGatewayEve
       let scanId: string | null = null;
       
       if (jobName.startsWith('transcribe-')) {
-        const match = jobName.match(/transcribe-\d+-(.+)/);
-        scanId = match ? match[1].split('_')[0] : null;
+        const match = jobName.match(/transcribe-(.+)/);
+        scanId = match ? match[1] : null;
       } else if (jobName.startsWith('rekognition-')) {
-        const match = jobName.match(/rekognition-\d+-(.+)/);
-        scanId = match ? match[1].split('_')[0] : null;
+        const match = jobName.match(/rekognition-(.+)/);
+        scanId = match ? match[1] : null;
       }
       
       if (scanId) {

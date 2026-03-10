@@ -17,6 +17,7 @@ import { marshall } from '@aws-sdk/util-dynamodb';
 // CONFIGURATION
 // ============================================================================
 
+
 const logger = new Logger({ serviceName: 'scanner' });
 const transcribe = new TranscribeClient({});
 const rekognition = new RekognitionClient({});
@@ -122,6 +123,10 @@ async function publishEvent(event: {
 // ============================================================================
 
 export const handler = withDurableExecution(async (event: any, context) => {
+  // Wrap Powertools logger with durable context's replay-aware logger.
+  // This deduplicates logs across replays while preserving Powertools structured logging.
+  context.configureLogger({ customLogger: logger });
+
   const bucketName = event.detail.bucket.name;
   const objectKey = event.detail.object.key;
   const objectSize = event.detail.object.size;
@@ -159,7 +164,8 @@ export const handler = withDurableExecution(async (event: any, context) => {
         const transcriptionResult = await childContext.waitForCallback<string>(
           '2a-transcription-result',
           async (callbackToken: string) => {
-            const jobName = `transcribe-${Date.now()}-${scanId}`;
+            // Use stable identifier derived from durable state — Date.now() would differ on re-attempt
+            const jobName = `transcribe-${scanId}`;
             
             logger.info('Starting transcription job', { jobName, objectKey, scanId });
             
@@ -175,21 +181,30 @@ export const handler = withDurableExecution(async (event: any, context) => {
                 bucketName,
                 objectKey,
                 createdAt: new Date().toISOString(),
-                ttl: Math.floor(Date.now() / 1000) + TIMEOUTS.TOKEN_TTL_SECONDS
+                // Derive TTL from checkpointed uploadedAt — Date.now() would shift on re-attempt
+                ttl: Math.floor(new Date(uploadedAt).getTime() / 1000) + TIMEOUTS.TOKEN_TTL_SECONDS
               })
             }));
             
             logger.info('Callback token stored in DynamoDB', { jobName });
             
-            // Start transcription job
-            await transcribe.send(new StartTranscriptionJobCommand({
-              TranscriptionJobName: jobName,
-              LanguageCode: 'en-US',
-              MediaFormat: 'mp4',
-              Media: { MediaFileUri: `s3://${bucketName}/${objectKey}` },
-              OutputBucketName: bucketName,
-              OutputKey: `transcripts/${objectKey}.json`
-            }));
+            // Start transcription job — ignore ConflictException if job already exists (idempotent on re-attempt)
+            try {
+              await transcribe.send(new StartTranscriptionJobCommand({
+                TranscriptionJobName: jobName,
+                LanguageCode: 'en-US',
+                MediaFormat: 'mp4',
+                Media: { MediaFileUri: `s3://${bucketName}/${objectKey}` },
+                OutputBucketName: bucketName,
+                OutputKey: `transcripts/${objectKey}.json`
+              }));
+            } catch (err: any) {
+              if (err.name === 'ConflictException') {
+                logger.info('Transcription job already exists, skipping start', { jobName });
+              } else {
+                throw err;
+              }
+            }
             
             logger.info('Transcription job started successfully', { jobName });
             
@@ -254,7 +269,8 @@ export const handler = withDurableExecution(async (event: any, context) => {
           const rekognitionResult = await childContext.waitForCallback<string>(
             '2b-rekognition-result',
             async (callbackToken: string) => {
-              const jobName = `rekognition-${Date.now()}-${scanId}`;
+              // Use stable identifier derived from durable state — Date.now() would differ on re-attempt
+              const jobName = `rekognition-${scanId}`;
               
               // Store callback token in DynamoDB
               await ddb.send(new PutItemCommand({
@@ -269,19 +285,28 @@ export const handler = withDurableExecution(async (event: any, context) => {
                   objectKey,
                   jobType: 'rekognition',
                   createdAt: new Date().toISOString(),
-                  ttl: Math.floor(Date.now() / 1000) + TIMEOUTS.TOKEN_TTL_SECONDS
+                  // Derive TTL from checkpointed uploadedAt — Date.now() would shift on re-attempt
+                  ttl: Math.floor(new Date(uploadedAt).getTime() / 1000) + TIMEOUTS.TOKEN_TTL_SECONDS
                 })
               }));
               
-              // Start Rekognition text detection job
-              await rekognition.send(new StartTextDetectionCommand({
-                Video: { S3Object: { Bucket: bucketName, Name: objectKey } },
-                NotificationChannel: {
-                  SNSTopicArn: REKOGNITION_SNS_TOPIC_ARN,
-                  RoleArn: REKOGNITION_ROLE_ARN
-                },
-                JobTag: jobName
-              }));
+              // Start Rekognition text detection job — ignore if job already exists (idempotent on re-attempt)
+              try {
+                await rekognition.send(new StartTextDetectionCommand({
+                  Video: { S3Object: { Bucket: bucketName, Name: objectKey } },
+                  NotificationChannel: {
+                    SNSTopicArn: REKOGNITION_SNS_TOPIC_ARN,
+                    RoleArn: REKOGNITION_ROLE_ARN
+                  },
+                  JobTag: jobName
+                }));
+              } catch (err: any) {
+                if (err.name === 'IdempotentParameterMismatchException' || err.name === 'ConflictException') {
+                  logger.info('Rekognition job already exists, skipping start', { jobName });
+                } else {
+                  throw err;
+                }
+              }
               
               logger.info('Rekognition text detection job started successfully', { jobName });
               
@@ -348,7 +373,8 @@ export const handler = withDurableExecution(async (event: any, context) => {
       }
     ]);
 
-    logger.info('Parallel execution completed', {
+    // Use context.logger outside steps to avoid duplicate logs on replay
+    context.logger.info('Parallel execution completed', {
       transcriptDataExists: !!parallelResults.all[0]?.result,
       rekognitionDataExists: !!parallelResults.all[1]?.result,
       parallelResultsStructure: JSON.stringify(parallelResults, null, 2)
@@ -895,7 +921,8 @@ Keep it concise and actionable.`;
             bucketName,
             objectKey,
             createdAt: new Date().toISOString(),
-            ttl: Math.floor(Date.now() / 1000) + TIMEOUTS.APPROVAL_TOKEN_TTL_SECONDS
+            // Derive TTL from checkpointed uploadedAt — Date.now() would shift on re-attempt
+            ttl: Math.floor(new Date(uploadedAt).getTime() / 1000) + TIMEOUTS.APPROVAL_TOKEN_TTL_SECONDS
           })
         }));
         
@@ -974,7 +1001,8 @@ Keep it concise and actionable.`;
       });
     });
 
-    logger.info('Scanner completed successfully', { 
+    // Use context.logger outside steps to avoid duplicate logs on replay
+    context.logger.info('Scanner completed successfully', { 
       scanId,
       userId,
       overallAssessment: scanRecord.overallAssessment,
@@ -997,7 +1025,8 @@ Keep it concise and actionable.`;
     };
 
   } catch (error) {
-    logger.error('Scanner function failed', {
+    // Use context.logger outside steps to avoid duplicate logs on replay
+    context.logger.error('Scanner function failed', {
       error: error instanceof Error ? error.message : String(error),
       scanId,
       objectKey
